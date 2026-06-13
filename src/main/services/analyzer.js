@@ -134,21 +134,43 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
     }
 
     let classified = 0;
-    for (let i = 0; i < targets.length; i += 1) {
-      const pr = targets[i];
-      emit({
-        task: 'categorize',
-        message: `Summarizing #${pr.number} ${truncate(pr.title, 60)} (${i + 1}/${targets.length})…`,
-        current: i + 1,
-        total: targets.length,
-      });
-      await ensureDetails(repo, pr);
-      const messages = buildSummarizeMessages({ repo, buckets: bucketSummaries(data), pr });
-      const content = await loggedChat(sprintId, data, 'summarize', `#${pr.number} ${truncate(pr.title, 60)}`,
-        { messages, schema: PR_SUMMARY_SCHEMA });
-      classified += applyClassifications(data, [{ number: pr.number, ...extractJson(content), summaryFingerprint: fp }]);
-      store.saveSprintData(sprintId, data); // persist per PR — long runs survive interruption
-    }
+    // One PR per LLM call. Concurrency defaults to 1 — strictly one at a time —
+    // and the "Summaries in parallel" setting raises it for users whose Ollama
+    // is configured to serve parallel requests (OLLAMA_NUM_PARALLEL). Buckets
+    // dedupe by name at apply time, so parallel workers never create dupes.
+    const limit = Math.max(1, Math.min(8, Number(store.getSettings().summaryConcurrency) || 1));
+    let next = 0;
+    let done = 0;
+    let failure = null;
+
+    const worker = async () => {
+      while (next < targets.length && !failure) {
+        const pr = targets[next];
+        next += 1;
+        emit({
+          task: 'categorize',
+          message: `Summarizing #${pr.number} ${truncate(pr.title, 60)} (${done + 1}/${targets.length})…`,
+          current: done + 1,
+          total: targets.length,
+        });
+        try {
+          await ensureDetails(repo, pr);
+          const messages = buildSummarizeMessages({ repo, buckets: bucketSummaries(data), pr });
+          const content = await loggedChat(sprintId, data, 'summarize', `#${pr.number} ${truncate(pr.title, 60)}`,
+            { messages, schema: PR_SUMMARY_SCHEMA });
+          classified += applyClassifications(data, [{ number: pr.number, ...extractJson(content), summaryFingerprint: fp }]);
+          done += 1;
+          store.saveSprintData(sprintId, data); // persist as we go — long runs survive interruption
+        } catch (e) {
+          if (!failure) failure = e; // stop picking up new work; let in-flight workers settle
+          return;
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(limit, targets.length) }, worker));
+    if (failure) throw failure;
+
     pruneEmptyBuckets(data); // re-summarization can empty an old bucket
     store.saveSprintData(sprintId, data);
 

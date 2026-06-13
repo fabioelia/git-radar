@@ -74,13 +74,18 @@ export function renderSettings(state) {
       <label>Temperature
         <input class="input" id="set-temp" type="number" min="0" max="1" step="0.1" value="${Number.isFinite(Number(s.temperature)) ? Number(s.temperature) : 0.2}" />
       </label>
+      <label>Summaries in parallel
+        <input class="input" id="set-concurrency" type="number" min="1" max="8" step="1" value="${Number(s.summaryConcurrency) || 1}" />
+      </label>
     </div>
     <div class="form-actions">
       <button class="btn ghost" data-action="test-ollama">Test connection</button>
       ${ollamaTest}
     </div>
     <p class="hint">Pull the model first: <code>ollama pull gemma3:12b</code> (or <code>gemma3:4b</code> on lighter machines).
-    Classification uses JSON-schema-constrained outputs, so smaller Gemma variants stay parseable — they're just less nuanced.</p>
+    Per-PR summaries use JSON-schema-constrained outputs, so smaller Gemma variants stay parseable — they're just less nuanced.</p>
+    <p class="hint"><strong>Summaries in parallel</strong> is how many PRs Git Radar summarizes at once — <code>1</code> means strictly one at a time.
+    Raise it only if your Ollama serves concurrent requests (<code>OLLAMA_NUM_PARALLEL</code>); on a single local model, higher values usually just contend for the GPU.</p>
   </section>
 
   <section class="card">

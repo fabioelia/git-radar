@@ -399,6 +399,7 @@ const actions = {
       ollamaModel: document.getElementById('set-ollama-model')?.value?.trim(),
       numCtx: Number(document.getElementById('set-numctx')?.value) || 16384,
       temperature: Number.isFinite(temp) ? temp : 0.2,
+      summaryConcurrency: Math.max(1, Math.min(8, Number(document.getElementById('set-concurrency')?.value) || 1)),
       mcpServers,
       autoPoll: document.getElementById('set-autopoll')?.checked || false,
       autoPollMinutes: Number(document.getElementById('set-autopoll-mins')?.value) || 15,

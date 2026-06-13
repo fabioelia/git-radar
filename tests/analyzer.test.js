@@ -117,6 +117,43 @@ test('categorize summarizes each PR (per-PR), fetches discussion, and builds buc
   assert.ok(Number.isFinite(log[0].durationMs));
 });
 
+function concurrencyProbe() {
+  let active = 0;
+  let max = 0;
+  return {
+    chat: async () => {
+      active += 1;
+      max = Math.max(max, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active -= 1;
+      return JSON.stringify({ bucket: 'B', work_type: 'chore', behind_flag: false, user_facing: true, summary: 's', detail: 'd' });
+    },
+    maxActive: () => max,
+  };
+}
+
+test('categorize summarizes strictly one at a time by default', async () => {
+  const store = memStore({ repo, sprint, data: { prs: [pr(1), pr(2), pr(3)], buckets: [], reports: [] } });
+  const probe = concurrencyProbe();
+  const analyzer = createAnalyzer({ store, ollama: probe, github: {}, mcp: {} });
+  const res = await analyzer.categorize('s1');
+  assert.equal(res.classified, 3);
+  assert.equal(probe.maxActive(), 1); // no parallelism unless asked for
+});
+
+test('categorize runs up to the configured number in parallel', async () => {
+  const store = memStore({
+    repo, sprint,
+    data: { prs: [pr(1), pr(2), pr(3), pr(4), pr(5)], buckets: [], reports: [] },
+    settings: { summaryConcurrency: 3 },
+  });
+  const probe = concurrencyProbe();
+  const analyzer = createAnalyzer({ store, ollama: probe, github: {}, mcp: {} });
+  const res = await analyzer.categorize('s1');
+  assert.equal(res.classified, 5);
+  assert.equal(probe.maxActive(), 3); // capped at the setting
+});
+
 test('categorize skips current PRs and re-summarizes only when the prompt changes', async () => {
   const repoMut = { id: 'r1', owner: 'acme', name: 'newton', contextPrompt: 'v1', trackedBranches: [] };
   const store = memStore({ repo: repoMut, sprint, data: { prs: [pr(1), pr(2)], buckets: [], reports: [] } });

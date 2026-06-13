@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS = {
   ollamaModel: 'gemma3:12b',
   numCtx: 16384,
   temperature: 0.2,
+  summaryConcurrency: 1,
   mcpServers: [],
   autoPoll: false,
   autoPollMinutes: 15,
