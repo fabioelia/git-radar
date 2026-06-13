@@ -12,10 +12,10 @@ export function renderReport(state) {
     <section class="card empty-state">
       <h2>No report yet for ${escapeHtml(d.sprint.name)}</h2>
       <p>Generate one with <strong>📝 Report</strong> above. The local LLM writes it from the bucket
-      statistics${state.settings?.mcpServers?.length
+      statistics plus a deterministic ledger of every merged PR — titles, authors and changed files${state.settings?.mcpServers?.length
         ? ', and can call your configured MCP tools (e.g. Jira) to compare planned vs. actual'
         : ''}.
-      Classify your PRs first for a meaningful report.</p>
+      Classifying your PRs first sharpens the buckets, but the report stays grounded either way.</p>
     </section>`;
   }
 

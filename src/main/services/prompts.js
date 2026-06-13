@@ -163,30 +163,21 @@ export function buildReportMessages({ repo, sprint, stats, buckets, prs, tools }
   const system = `You are Git Radar's sprint analyst. Write a sprint report in GitHub-flavored markdown for the team lead. Be concrete and skimmable, under ~700 words.
 
 Rules:
-- Use ONLY the numbers provided in the stats JSON — never invent counts, dates or hours.
+- Use ONLY the numbers provided in the stats JSON for aggregate counts, hours and percentages — never invent them.
+- The MERGED PRS ledger below the stats is deterministic ground truth too: its PR titles, authors, work types, file counts and changed-file paths are reliable. Use it to say concretely WHAT shipped and WHO shipped it — even for PRs not yet sorted into a bucket. Do not leave "What shipped" empty just because PRs are unclassified; summarize them from their titles and descriptions.
 - "Defect turnaround" figures are wall-clock time from a defect PR being opened to merged — describe them as time exposed to defect work, not engineer-hours.
 - Sections, in order: "## TL;DR" (3–5 bullets), "## What shipped", "## Buckets of work" (markdown table: Bucket | PRs | Features/Defects | Defect turnaround | Notes), "## Defect chasing", "## Hidden work" (features fully behind flags or not user-facing), "## Release operations"${tools.length ? ', "## Planned vs actual" (only if tool data came back)' : ''}, "## Watch-outs".
 - Skip a section gracefully ("Nothing notable.") rather than padding it.
 
 ${repoContextBlock(repo)}${buildToolInstructions(tools)}`;
 
-  const bucketDetail = buckets
-    .map((b) => {
-      const titles = prs
-        .filter((p) => p.bucketId === b.id)
-        .slice(0, 12)
-        .map((p) => `#${p.number} ${truncate(p.title, 80)} [${p.ann?.workType || '?'}]`);
-      return `- ${b.name}: ${b.description || ''}\n  ${titles.join('\n  ')}`;
-    })
-    .join('\n');
-
   const user = `Sprint "${sprint.name}" — ${sprint.startDate} → ${sprint.endDate} (today: ${isoDate(new Date())})
 
 STATS (computed deterministically — trust these):
 ${JSON.stringify(compactStats(stats))}
 
-BUCKET CONTENTS:
-${bucketDetail || '(no buckets yet)'}
+MERGED PRS (deterministic — title, author, work type, churn and changed files per PR; grouped by bucket, with unclassified PRs listed explicitly):
+${prLedger({ buckets, prs })}
 
 Write the report now.`;
 
@@ -194,6 +185,69 @@ Write the report now.`;
     { role: 'system', content: system },
     { role: 'user', content: user },
   ];
+}
+
+/**
+ * A deterministic, skimmable digest of every merged PR — titles, authors,
+ * work type, churn and changed files — grouped by bucket with an explicit
+ * "Unbucketed / unclassified" group. This is what makes the report useful
+ * even before (or when) the LLM classification step has run: the analyst
+ * always has the raw "what shipped, by whom, touching what" material to work
+ * from, never just aggregate counts.
+ */
+export function prLedger({ buckets, prs, cap = 150 }) {
+  const merged = prs.filter((p) => p.mergedAt);
+  const shown = merged.slice(0, cap);
+
+  const byBucket = new Map();
+  const unbucketed = [];
+  for (const pr of shown) {
+    if (pr.bucketId) {
+      if (!byBucket.has(pr.bucketId)) byBucket.set(pr.bucketId, []);
+      byBucket.get(pr.bucketId).push(pr);
+    } else {
+      unbucketed.push(pr);
+    }
+  }
+
+  const sections = [];
+  for (const b of buckets) {
+    const list = byBucket.get(b.id);
+    if (!list?.length) continue;
+    const head = `### ${b.name}${b.description ? ` — ${truncate(b.description, 100)}` : ''} (${list.length} PRs)`;
+    sections.push(`${head}\n${list.map(prLedgerLine).join('\n')}`);
+  }
+  if (unbucketed.length) {
+    sections.push(`### Unbucketed / unclassified (${unbucketed.length} PRs)\n${unbucketed.map(prLedgerLine).join('\n')}`);
+  }
+
+  let out = sections.join('\n\n') || '(no merged PRs in this window)';
+  if (merged.length > shown.length) {
+    out += `\n\n…and ${merged.length - shown.length} more merged PRs not listed individually (all counted in the stats totals above).`;
+  }
+  return out;
+}
+
+function prLedgerLine(pr) {
+  const ann = pr.ann || {};
+  const type = ann.workType || 'unclassified';
+  const flag = ann.behindFlag ? ` [flag${ann.flagName ? `:${ann.flagName}` : ''}]` : '';
+  const lines = [
+    `#${pr.number} "${truncate(pr.title, 120)}" — ${pr.author} · ${type}${flag}`,
+    `   ${pr.base || '?'} ← ${truncate(pr.head || '?', 50)} · merged ${pr.mergedAt ? isoDate(pr.mergedAt) : '?'} · +${pr.additions}/-${pr.deletions} in ${pr.changedFiles} files`,
+  ];
+
+  const paths = pr.files?.length
+    ? pr.files.slice(0, 6).map((f) => (typeof f === 'string' ? f : f.path))
+    : (pr.dirs || []).map((d) => `${d.dir} (${d.files})`);
+  if (paths.length) {
+    const more = pr.files?.length > 6 ? ` … (+${pr.files.length - 6} files)` : '';
+    lines.push(`   files: ${truncate(paths.join(', '), 240)}${more}`);
+  }
+
+  const desc = ann.summary || pr.body;
+  if (desc) lines.push(`   ${ann.summary ? 'summary' : 'body'}: ${truncate(String(desc).replace(/\s+/g, ' '), 220)}`);
+  return lines.join('\n');
 }
 
 /** Trim the stats object so it fits comfortably in a local model's context. */

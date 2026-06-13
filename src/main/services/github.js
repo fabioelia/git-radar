@@ -100,7 +100,24 @@ function normalizePR(raw) {
     url: raw.url || '',
     milestone: raw.milestone?.title || null,
     dirs: summarizeDirs(raw.files),
+    files: topFiles(raw.files),
   };
+}
+
+/**
+ * Keep the actual changed-file paths (with per-file churn) so the report
+ * generator has concrete signal — not just the directory rollup. Sorted by
+ * churn so the most significant files survive the cap on noisy PRs.
+ */
+export function topFiles(files, top = 50) {
+  if (!Array.isArray(files) || !files.length) return [];
+  return files
+    .map((f) => (typeof f === 'string'
+      ? { path: f, additions: 0, deletions: 0 }
+      : { path: f?.path || '', additions: f?.additions ?? 0, deletions: f?.deletions ?? 0 }))
+    .filter((f) => f.path)
+    .sort((a, b) => (b.additions + b.deletions) - (a.additions + a.deletions))
+    .slice(0, top);
 }
 
 /**

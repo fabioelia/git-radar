@@ -38,9 +38,12 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
    by a second LLM pass when they proliferate.
 
 3. **📝 Report** — Gemma writes the sprint report from deterministically computed stats
-   (the LLM never does arithmetic). With MCP servers configured, it can call their
-   tools first — e.g. fetch Jira sprint priorities — and write a *planned vs. actual*
-   section.
+   (the LLM never does arithmetic) plus a deterministic ledger of every merged PR —
+   title, author, work type, churn and changed files, grouped by bucket with
+   still-unclassified PRs listed explicitly — so the report describes what actually
+   shipped even before classification runs. With MCP servers configured, it can call
+   their tools first — e.g. fetch Jira sprint priorities — and write a *planned vs.
+   actual* section.
 
 4. **Prompts tab** — full transparency into the local LLM: every exchange is logged
    verbatim (system + user messages sent, raw response, duration, failures included)

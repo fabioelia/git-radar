@@ -62,9 +62,12 @@ a narrative + numbers a team lead can read in two minutes at sprint review.
 4. **Stats** — pure, deterministic JS over the annotated PRs (the LLM never does
    arithmetic): per-bucket type breakdown, churn, defect turnaround time, hidden
    (fully-flagged) features, merges-per-day timeline per base branch, contributors.
-5. **Report** — Gemma writes a markdown sprint report from the stats + buckets. If MCP
-   servers are configured, the model may call their tools first (prompt-driven tool
-   loop, max 5 calls) to pull sprint priorities and compare plan vs. reality.
+5. **Report** — Gemma writes a markdown sprint report from the stats + buckets, plus a
+   deterministic per-PR ledger (title, author, work type, churn, changed files; grouped
+   by bucket, with unclassified PRs listed explicitly) so the narrative is grounded in
+   what actually merged even before — or when — classification has run. If MCP servers
+   are configured, the model may call their tools first (prompt-driven tool loop, max 5
+   calls) to pull sprint priorities and compare plan vs. reality.
 
 ## Key design decisions
 
