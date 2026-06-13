@@ -1,0 +1,125 @@
+// Wrapper around the GitHub CLI. All GitHub access goes through `gh` so the
+// app inherits the user's existing auth (incl. SSO / GH Enterprise) and never
+// touches tokens. execFile (no shell) keeps arguments injection-safe.
+
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { truncate } from './util.js';
+
+const pExecFile = promisify(execFile);
+
+const LIST_FIELDS = [
+  'number', 'title', 'body', 'author', 'labels', 'baseRefName', 'headRefName',
+  'createdAt', 'mergedAt', 'additions', 'deletions', 'changedFiles', 'url',
+  'milestone',
+];
+
+async function gh(args, { timeout = 180000 } = {}) {
+  try {
+    const { stdout } = await pExecFile('gh', args, {
+      timeout,
+      maxBuffer: 128 * 1024 * 1024,
+      env: { ...process.env, GH_PAGER: 'cat', NO_COLOR: '1', CLICOLOR: '0' },
+    });
+    return stdout;
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      throw new Error('GitHub CLI (gh) not found on PATH. Install it from https://cli.github.com and run `gh auth login`.');
+    }
+    const stderr = (e.stderr || '').toString().trim();
+    throw new Error(`gh ${args.slice(0, 2).join(' ')} failed: ${stderr || e.message}`);
+  }
+}
+
+export async function checkGh() {
+  let version;
+  try {
+    const out = await gh(['--version'], { timeout: 10000 });
+    version = out.split('\n')[0].trim();
+  } catch (e) {
+    return { ok: false, authed: false, error: e.message };
+  }
+  try {
+    await gh(['auth', 'status'], { timeout: 20000 });
+    return { ok: true, authed: true, version };
+  } catch (e) {
+    return { ok: true, authed: false, version, error: e.message };
+  }
+}
+
+/**
+ * Fetch PRs merged inside [since..until] (inclusive, YYYY-MM-DD). When
+ * `branches` is non-empty, one query per base branch; otherwise all merged
+ * PRs regardless of base. Tries to include per-file paths (great signal for
+ * monorepo bucketing) and falls back to the lighter query if that fails.
+ */
+export async function fetchMergedPRs(repo, { since, until, branches = [], limit = 400 } = {}) {
+  const slug = `${repo.owner}/${repo.name}`;
+  const queries = branches.length
+    ? branches.map((b) => `merged:${since}..${until} base:${b}`)
+    : [`merged:${since}..${until}`];
+
+  const byNumber = new Map();
+  for (const search of queries) {
+    const prs = await listPRs(slug, search, limit, true)
+      .catch(() => listPRs(slug, search, limit, false));
+    for (const pr of prs) byNumber.set(pr.number, pr);
+  }
+  return [...byNumber.values()].sort((a, b) =>
+    String(a.mergedAt).localeCompare(String(b.mergedAt)));
+}
+
+async function listPRs(slug, search, limit, withFiles) {
+  const fields = withFiles ? [...LIST_FIELDS, 'files'] : LIST_FIELDS;
+  const out = await gh([
+    'pr', 'list',
+    '--repo', slug,
+    '--state', 'merged',
+    '--search', search,
+    '--limit', String(limit),
+    '--json', fields.join(','),
+  ]);
+  const rows = JSON.parse(out || '[]');
+  return rows.map(normalizePR);
+}
+
+function normalizePR(raw) {
+  return {
+    number: raw.number,
+    title: raw.title || '',
+    body: truncate(raw.body || '', 4000),
+    author: raw.author?.login || 'unknown',
+    labels: (raw.labels || []).map((l) => l.name).filter(Boolean),
+    base: raw.baseRefName || '',
+    head: raw.headRefName || '',
+    createdAt: raw.createdAt || null,
+    mergedAt: raw.mergedAt || null,
+    additions: raw.additions ?? 0,
+    deletions: raw.deletions ?? 0,
+    changedFiles: raw.changedFiles ?? 0,
+    url: raw.url || '',
+    milestone: raw.milestone?.title || null,
+    dirs: summarizeDirs(raw.files),
+  };
+}
+
+/**
+ * Condense changed file paths into the top directories touched — in a
+ * monorepo, `packages/checkout (14)` tells the classifier more than any
+ * individual path. Uses up to two leading path segments.
+ */
+export function summarizeDirs(files, top = 12) {
+  if (!Array.isArray(files) || !files.length) return [];
+  const counts = new Map();
+  for (const f of files) {
+    const p = typeof f === 'string' ? f : f?.path;
+    if (!p) continue;
+    const segs = p.split('/');
+    const key = segs.length <= 1 ? '(root)' : segs.slice(0, Math.min(2, segs.length - 1)).join('/');
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, top)
+    .map(([dir, files]) => ({ dir, files }));
+}
