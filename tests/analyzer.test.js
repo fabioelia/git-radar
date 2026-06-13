@@ -117,6 +117,31 @@ test('categorize summarizes each PR (per-PR), fetches discussion, and builds buc
   assert.ok(Number.isFinite(log[0].durationMs));
 });
 
+test('categorize skips current PRs and re-summarizes only when the prompt changes', async () => {
+  const repoMut = { id: 'r1', owner: 'acme', name: 'newton', contextPrompt: 'v1', trackedBranches: [] };
+  const store = memStore({ repo: repoMut, sprint, data: { prs: [pr(1), pr(2)], buckets: [], reports: [] } });
+  let calls = 0;
+  const ollama = {
+    chat: async () => { calls += 1; return JSON.stringify({ bucket: 'B', work_type: 'chore', behind_flag: false, user_facing: false, summary: 's', detail: 'd' }); },
+  };
+  const analyzer = createAnalyzer({ store, ollama, github: {}, mcp: {} });
+
+  await analyzer.categorize('s1');
+  assert.equal(calls, 2); // both summarized
+  assert.ok(store.peek().prs[0].ann.summaryFingerprint); // fingerprint stamped
+
+  // re-running with the same prompt is a no-op — finished work is not redone
+  const again = await analyzer.categorize('s1');
+  assert.equal(again.classified, 0);
+  assert.equal(calls, 2);
+
+  // editing the release-cycle prompt makes both stale → they get re-summarized
+  repoMut.contextPrompt = 'v2 — now trunk-based';
+  const restaled = await analyzer.categorize('s1');
+  assert.equal(restaled.classified, 2);
+  assert.equal(calls, 4);
+});
+
 test('summarizePR re-runs one PR on demand and inspectPR builds the prompt without firing', async () => {
   const store = memStore({ repo, sprint, data: { prs: [pr(7)], buckets: [], reports: [] } });
   let chatCalls = 0;

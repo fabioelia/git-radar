@@ -18,9 +18,9 @@ export function renderDashboard(state) {
   `;
 }
 
-/** Count of merged PRs synced but not yet run through the summarizer. */
+/** Merged PRs a scan would (re)summarize: never-summarized plus prompt-stale. */
 function pendingCount(state) {
-  return state.data.stats?.totals?.byType?.unclassified || 0;
+  return state.data.pendingSummary || 0;
 }
 
 /**
@@ -34,7 +34,7 @@ function pendingBanner(state) {
   return `
   <section class="card pending-banner">
     <div><strong>${pending} PR${pending === 1 ? '' : 's'} pending summary</strong>
-      <span class="muted"> — synced, but not yet run through the local LLM.</span></div>
+      <span class="muted"> — new, or summarized with an older prompt. A scan re-runs only these.</span></div>
     <span class="spacer"></span>
     <button class="btn primary" data-action="summarize-pending">Summarize ${pending} pending</button>
   </section>`;
@@ -135,6 +135,9 @@ function prRow(p, buckets) {
   const comments = p.comments?.length
     ? `<span title="comments + reviews on the PR">💬 ${p.comments.length}</span>`
     : '';
+  const stale = p.stale
+    ? '<span class="chip stale" title="Summarized with an older prompt — a scan or “Summarize pending” will re-run it">↻ stale</span>'
+    : '';
   return `
   <li class="pr-row">
     <a class="pr-num" href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer">#${p.number}</a>
@@ -144,6 +147,7 @@ function prRow(p, buckets) {
         ${typeChip(p.ann?.workType)}
         ${p.ann?.behindFlag ? `<span class="chip flag">🚩${p.ann.flagName ? ` ${escapeHtml(p.ann.flagName)}` : ''}</span>` : ''}
         ${risk}
+        ${stale}
         <span>${escapeHtml(p.author)}</span>
         <span>→ ${escapeHtml(p.base)}</span>
         <span title="open → merge">${formatHours(cycle)}</span>

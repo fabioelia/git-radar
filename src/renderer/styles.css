@@ -546,6 +546,7 @@ label .input, label .select { color: var(--text); font-weight: 400; }
 .pending-head { display: flex; align-items: center; gap: 10px; }
 .pending-head .card-title { margin: 0; }
 
+.chip.stale { color: var(--yellow); border-color: rgba(255, 209, 102, 0.35); }
 .chip.risk-low { color: var(--green); border-color: rgba(61, 220, 151, 0.3); }
 .chip.risk-medium { color: var(--yellow); border-color: rgba(255, 209, 102, 0.35); }
 .chip.risk-high { color: var(--red); border-color: rgba(255, 107, 107, 0.4); }

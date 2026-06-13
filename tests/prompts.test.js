@@ -4,7 +4,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReportMessages, prLedger, buildSummarizeMessages, PR_SUMMARY_SCHEMA } from '../src/main/services/prompts.js';
+import {
+  buildReportMessages, prLedger, buildSummarizeMessages, PR_SUMMARY_SCHEMA,
+  summaryFingerprint, isSummaryStale, PROMPT_VERSION,
+} from '../src/main/services/prompts.js';
 
 const repo = { owner: 'acme', name: 'newton', contextPrompt: 'develop → stage → main' };
 const sprint = { name: 'Sprint 1', startDate: '2026-06-08', endDate: '2026-06-28' };
@@ -89,6 +92,18 @@ test('buildSummarizeMessages notes when there is no discussion', () => {
   const messages = buildSummarizeMessages({ repo: { owner: 'a', name: 'b' }, buckets: [{ name: 'Checkout', description: 'co', prCount: 3 }], pr: pr(1, { comments: [] }) });
   assert.match(messages[1].content, /PR DISCUSSION: \(none captured\)/);
   assert.match(messages[1].content, /- Checkout: co \[3 PRs\]/); // existing buckets offered for reuse
+});
+
+test('summaryFingerprint tracks the release-cycle prompt; isSummaryStale follows it', () => {
+  const repoA = { contextPrompt: 'develop → stage → main' };
+  const repoB = { contextPrompt: 'trunk-based' };
+  assert.ok(summaryFingerprint(repoA).startsWith(`${PROMPT_VERSION}:`));
+  assert.notEqual(summaryFingerprint(repoA), summaryFingerprint(repoB));
+
+  assert.equal(isSummaryStale({ number: 1 }, repoA), true); // never summarized
+  const done = { number: 1, ann: { summaryFingerprint: summaryFingerprint(repoA) } };
+  assert.equal(isSummaryStale(done, repoA), false); // same prompt → current
+  assert.equal(isSummaryStale(done, repoB), true); // prompt changed → stale
 });
 
 test('PR_SUMMARY_SCHEMA requires the planning fields', () => {

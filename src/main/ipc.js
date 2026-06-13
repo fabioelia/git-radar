@@ -11,6 +11,7 @@ import { createOllama } from './services/ollama.js';
 import { createAnalyzer } from './services/analyzer.js';
 import { createPoller } from './services/poller.js';
 import { computeStats } from './services/stats.js';
+import { isSummaryStale } from './services/prompts.js';
 
 export function registerIpc(getWindow, appInfo) {
   const ollama = createOllama(() => store.getSettings());
@@ -94,11 +95,15 @@ export function registerIpc(getWindow, appInfo) {
       sprint,
       repo,
       sprints: store.listSprints(sprint.repoId),
-      prs: data.prs,
+      // `stale` marks a PR summarized with an older prompt (annotated but
+      // fingerprint mismatch); pendingSummary counts everything a scan would
+      // (re)process — never-summarized plus stale.
+      prs: data.prs.map((p) => ({ ...p, stale: Boolean(p.ann) && isSummaryStale(p, repo) })),
       buckets: data.buckets,
       reports: data.reports || [],
       llmLog: data.llmLog || [],
       lastSyncAt: data.lastSyncAt,
+      pendingSummary: data.prs.filter((p) => p.mergedAt && isSummaryStale(p, repo)).length,
       stats: computeStats({ sprint, prs: data.prs, buckets: data.buckets }),
     };
   });

@@ -6,6 +6,28 @@ import { truncate, formatHours, isoDate } from './util.js';
 
 export const WORK_TYPES = ['feature', 'defect', 'chore', 'infra', 'docs', 'test', 'refactor', 'release'];
 
+// Bump when the summarizer's instructions change in a way that should
+// invalidate prior summaries. Combined with a hash of the repo's release-cycle
+// prompt, this is each summary's "fingerprint": a PR is re-summarized only when
+// its fingerprint no longer matches the current one (we changed the template,
+// or you edited the release-cycle prompt) — never just because a scan ran again.
+export const PROMPT_VERSION = 1;
+
+function djb2(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+export function summaryFingerprint(repo) {
+  return `${PROMPT_VERSION}:${djb2(repo?.contextPrompt || '')}`;
+}
+
+/** A PR needs (re)summarizing if it has no annotation or its prompt changed. */
+export function isSummaryStale(pr, repo) {
+  return !pr?.ann || pr.ann.summaryFingerprint !== summaryFingerprint(repo);
+}
+
 // One merged PR → one structured record. `detail` and `risk` are the
 // sprint-planning payload: a few sentences a team lead can read, grounded in
 // the description, the changed files and the PR discussion.

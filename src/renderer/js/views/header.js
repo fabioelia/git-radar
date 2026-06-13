@@ -8,7 +8,7 @@ export function sprintHeader(state) {
   const { repo, sprint, sprints } = d;
   const progress = sprintProgress(sprint);
   const busy = Boolean(state.task);
-  const pending = d.stats?.totals?.byType?.unclassified || 0;
+  const pending = d.pendingSummary || 0;
 
   const sprintOptions = [...sprints]
     .reverse()

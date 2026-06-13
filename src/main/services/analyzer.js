@@ -6,6 +6,7 @@ import {
   buildSummarizeMessages,
   buildReorgMessages,
   buildReportMessages,
+  summaryFingerprint,
   PR_SUMMARY_SCHEMA,
   REORG_SCHEMA,
   WORK_TYPES,
@@ -121,9 +122,14 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
       }
       data.buckets = [];
     }
-    const targets = data.prs.filter((p) => !p.ann);
+    // A PR is a target if it was never summarized OR its summary was produced
+    // with a different prompt (template version or the repo's release-cycle
+    // prompt changed). Already-summarized PRs whose prompt is unchanged are
+    // skipped — a re-scan never redoes finished work.
+    const fp = summaryFingerprint(repo);
+    const targets = data.prs.filter((p) => !p.ann || p.ann.summaryFingerprint !== fp);
     if (!targets.length) {
-      emit({ task: 'categorize', message: 'Nothing new to summarize.', done: true });
+      emit({ task: 'categorize', message: 'Nothing to summarize — all PRs are current.', done: true });
       return { classified: 0, buckets: data.buckets.length, autoReorganized: false };
     }
 
@@ -132,7 +138,7 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
       const pr = targets[i];
       emit({
         task: 'categorize',
-        message: `Summarizing PR #${pr.number} (${i + 1}/${targets.length})…`,
+        message: `Summarizing #${pr.number} ${truncate(pr.title, 60)} (${i + 1}/${targets.length})…`,
         current: i + 1,
         total: targets.length,
       });
@@ -140,9 +146,11 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
       const messages = buildSummarizeMessages({ repo, buckets: bucketSummaries(data), pr });
       const content = await loggedChat(sprintId, data, 'summarize', `#${pr.number} ${truncate(pr.title, 60)}`,
         { messages, schema: PR_SUMMARY_SCHEMA });
-      classified += applyClassifications(data, [{ number: pr.number, ...extractJson(content) }]);
+      classified += applyClassifications(data, [{ number: pr.number, ...extractJson(content), summaryFingerprint: fp }]);
       store.saveSprintData(sprintId, data); // persist per PR — long runs survive interruption
     }
+    pruneEmptyBuckets(data); // re-summarization can empty an old bucket
+    store.saveSprintData(sprintId, data);
 
     let autoReorganized = false;
     if (data.buckets.length >= AUTO_REORG_THRESHOLD) {
@@ -195,7 +203,7 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
     const content = await loggedChat(sprintId, data, 'summarize', `#${pr.number} ${truncate(pr.title, 60)} (manual)`,
       { messages, schema: PR_SUMMARY_SCHEMA });
     const parsed = extractJson(content);
-    applyClassifications(data, [{ number: pr.number, ...parsed }]);
+    applyClassifications(data, [{ number: pr.number, ...parsed, summaryFingerprint: summaryFingerprint(repo) }]);
     store.saveSprintData(sprintId, data);
     emit({ task: 'summarize', message: `PR #${pr.number} summarized.`, done: true });
     return { pr: data.prs.find((p) => p.number === prNumber), parsed, content, messages };
@@ -333,6 +341,7 @@ export function applyClassifications(data, classifications) {
       summary: String(c.summary || ''),
       detail: String(c.detail || ''),
       risk: ['low', 'medium', 'high'].includes(c.risk) ? c.risk : undefined,
+      summaryFingerprint: c.summaryFingerprint,
       classifiedAt: new Date().toISOString(),
     };
     applied += 1;
