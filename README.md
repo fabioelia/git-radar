@@ -108,6 +108,10 @@ pnpm test         # node --test: stats engine, store, analyzer pipeline (stubbed
 
 ## Troubleshooting
 
+- **`ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` when running `pnpm`** — your corepack is
+  outdated (common with homebrew-installed Node) and can't load modern pnpm. Fix:
+  `npm install -g corepack@latest && corepack enable pnpm` — or skip corepack entirely
+  with `npm i -g pnpm` (pnpm reads the `packageManager` pin itself).
 - **"Cannot reach Ollama"** — start it: `ollama serve`, and check the URL in Settings.
 - **Yellow `llm` dot** — Ollama is up but the configured model isn't pulled: `ollama pull gemma3:12b`.
 - **Classification feels shallow** — try a bigger Gemma variant, or raise `num_ctx`
