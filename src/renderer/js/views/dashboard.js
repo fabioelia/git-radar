@@ -1,7 +1,7 @@
 // The Radar view: KPIs, merge timeline, and the buckets-of-work grid.
 
 import { escapeHtml, formatHours, fmtInt, cycleHours } from '../util.js';
-import { timelineChart, typeBar, typeChip } from '../components/charts.js';
+import { timelineChart, typeBar, typeChip, TYPE_COLORS } from '../components/charts.js';
 
 export function renderDashboard(state) {
   const d = state.data;
@@ -116,6 +116,7 @@ function bucketCard(b, state) {
     </div>
     ${b.description ? `<p class="bucket-desc">${escapeHtml(b.description)}</p>` : ''}
     ${typeBar(b.byType, b.prCount)}
+    ${typeLegend(b.byType)}
     <ul class="pr-list">${visible.map((p) => prRow(p, d.buckets)).join('')}</ul>
     ${prs.length > 5
       ? `<button class="linklike" data-action="toggle-bucket" data-id="${b.id}">${expanded ? '▴ Show less' : `▾ Show all ${prs.length}`}</button>`
@@ -124,51 +125,62 @@ function bucketCard(b, state) {
 }
 
 function prRow(p, buckets) {
-  const cycle = cycleHours(p);
+  const a = p.ann || {};
+  const breaking = a.breaking || p.conventional?.breaking;
   const options = [
     `<option value="" ${!p.bucketId ? 'selected' : ''}>(no bucket)</option>`,
     ...buckets.map((b) => `<option value="${b.id}" ${b.id === p.bucketId ? 'selected' : ''}>${escapeHtml(b.name)}</option>`),
   ].join('');
-  const risk = p.ann?.risk
-    ? `<span class="chip risk-${p.ann.risk}" title="LLM risk read">${escapeHtml(p.ann.risk)} risk</span>`
-    : '';
-  const comments = p.comments?.length
-    ? `<span title="comments + reviews on the PR">💬 ${p.comments.length}</span>`
-    : '';
-  const stale = p.stale
-    ? '<span class="chip stale" title="Summarized with an older prompt — a scan or “Summarize pending” will re-run it">↻ stale</span>'
-    : '';
-  const highlight = p.ann?.highlight
-    ? `<span class="chip highlight" title="${escapeHtml(p.ann.userImpact || 'Notable / announce-worthy change')}">★</span>`
-    : '';
-  const breaking = p.ann?.breaking ? '<span class="chip breaking" title="Backward-incompatible change">⚠ breaking</span>' : '';
-  const security = p.ann?.security ? '<span class="chip security" title="Security fix / hardening">🔒 security</span>' : '';
+
+  // Classification tags, most important first. Plain runtime facts go on the
+  // dim sub-line below; the verbose `detail` lives in the 🔍 inspector.
+  const tags = [
+    a.highlight ? `<span class="chip highlight" title="Notable / announce-worthy">★</span>` : '',
+    breaking ? '<span class="chip breaking" title="Backward-incompatible change">⚠ breaking</span>' : '',
+    a.security ? '<span class="chip security" title="Security fix / hardening">🔒 security</span>' : '',
+    a.workType || p.conventional ? typeChip(a.workType || p.conventional.type) : '',
+    a.changelogCategory && a.changelogCategory !== 'none'
+      ? `<span class="chip cat" title="Keep a Changelog category">${escapeHtml(a.changelogCategory)}</span>` : '',
+    a.behindFlag ? `<span class="chip flag" title="behind a feature flag">🚩${a.flagName ? ` ${escapeHtml(a.flagName)}` : ''}</span>` : '',
+    a.risk ? `<span class="chip risk-${a.risk}" title="LLM risk read">${escapeHtml(a.risk)} risk</span>` : '',
+    p.stale ? '<span class="chip stale" title="Summarized with an older prompt — re-run to refresh">↻ stale</span>' : '',
+  ].filter(Boolean).join('');
+
+  // The one scannable line of meaning: product user-impact, else the summary.
+  const impact = a.userImpact || a.summary || '';
+
+  const sub = [
+    escapeHtml(p.author),
+    `→ ${escapeHtml(p.base)}`,
+    `<span title="open → merge">${formatHours(cycleHours(p))}</span>`,
+    `<span class="muted">+${p.additions}/−${p.deletions}</span>`,
+    p.comments?.length ? `<span title="comments + reviews">💬 ${p.comments.length}</span>` : '',
+  ].filter(Boolean).join('<span class="dotsep">·</span>');
+
   return `
   <li class="pr-row">
     <a class="pr-num" href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer">#${p.number}</a>
     <div class="pr-main">
-      <div class="pr-title" title="${escapeHtml(p.ann?.summary || p.title)}">${escapeHtml(p.title)}</div>
-      <div class="pr-meta">
-        ${highlight}
-        ${breaking}
-        ${security}
-        ${typeChip(p.ann?.workType)}
-        ${p.ann?.behindFlag ? `<span class="chip flag">🚩${p.ann.flagName ? ` ${escapeHtml(p.ann.flagName)}` : ''}</span>` : ''}
-        ${risk}
-        ${stale}
-        <span>${escapeHtml(p.author)}</span>
-        <span>→ ${escapeHtml(p.base)}</span>
-        <span title="open → merge">${formatHours(cycle)}</span>
-        <span class="muted">+${p.additions}/−${p.deletions}</span>
-        ${comments}
-      </div>
-      ${p.ann?.detail ? `<p class="pr-detail">${escapeHtml(p.ann.detail)}</p>` : ''}
+      <div class="pr-title" title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</div>
+      ${tags ? `<div class="pr-tags">${tags}</div>` : ''}
+      ${impact ? `<p class="pr-impact">${escapeHtml(impact)}</p>` : ''}
+      <div class="pr-sub">${sub}</div>
     </div>
     <div class="pr-actions">
       <button class="icon-btn" title="Inspect PR: diff, discussion, the generated prompt, and re-run the summary" data-action="inspect-pr" data-pr="${p.number}">🔍</button>
       <select class="select pr-move" data-change="move-pr" data-pr="${p.number}" title="Move to another bucket">${options}</select>
     </div>
   </li>`;
+}
+
+/** Compact colour-keyed legend so the type bar isn't a mystery. */
+function typeLegend(byType) {
+  const items = Object.entries(byType)
+    .filter(([, n]) => n > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([t, n]) => `<span class="tl-item"><span class="dot" style="background:${TYPE_COLORS[t] || '#555e6e'}"></span>${n} ${escapeHtml(t)}</span>`)
+    .join('');
+  return items ? `<div class="type-legend">${items}</div>` : '';
 }
 
 function unbucketedSection(state) {
