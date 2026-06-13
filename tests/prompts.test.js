@@ -1,6 +1,7 @@
-// The report prompt must carry deterministic per-PR ground truth — titles,
-// authors, churn and changed files — so the analyst can describe what shipped
-// even before any LLM classification has run. These tests lock that in.
+// The report prompt must carry deterministic per-PR ground truth — but stay
+// COMPACT so it fits a local model's context window. These tests lock in the
+// two-tier ledger (notable PRs in full + internal PRs collapsed), compact mode,
+// and the product-notes framing.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,32 +35,46 @@ function pr(number, over = {}) {
   };
 }
 
-test('prLedger lists unbucketed PRs with title, author, churn and files', () => {
-  const out = prLedger({ buckets: [], prs: [pr(101, { author: 'bob' })] });
-  assert.match(out, /Unbucketed \/ unclassified \(1 PRs\)/);
-  assert.match(out, /#101 "PR 101" — bob · unclassified/);
-  assert.match(out, /\+10\/-2 in 1 files/);
-  assert.match(out, /files: packages\/checkout\/file101\.ts/);
-  assert.match(out, /body: body of PR 101/);
+test('prLedger lists notable PRs in full and collapses internal PRs to one compact line', () => {
+  const prs = [
+    pr(101, { author: 'bob', ann: { workType: 'feature', userFacing: true, userImpact: 'Users can now do X.' } }),
+    pr(102, { author: 'sam', ann: { workType: 'chore', userFacing: false } }), // internal → "other"
+  ];
+  const out = prLedger({ buckets: [], prs });
+  assert.match(out, /Unbucketed \/ unclassified \(2 PRs\)/);
+  assert.match(out, /#101 "PR 101" — bob · feature · user-facing/);
+  assert.match(out, /→ Users can now do X\./);
+  assert.match(out, /other \(internal\/chore, titles only\): #102 PR 102/);
 });
 
-test('prLedger groups classified PRs under their bucket and uses the summary', () => {
+test('prLedger groups by bucket and uses user impact (falling back to summary) for notable PRs', () => {
   const buckets = [{ id: 'b1', name: 'Checkout', description: 'checkout work' }];
   const prs = [
-    pr(1, { bucketId: 'b1', ann: { workType: 'feature', behindFlag: true, flagName: 'new-co', summary: 'rebuilt cart' } }),
-    pr(2), // unbucketed
+    pr(1, { bucketId: 'b1', ann: { workType: 'feature', userFacing: true, behindFlag: true, flagName: 'new-co', summary: 'rebuilt cart' } }),
+    pr(2, { bucketId: 'b1', ann: { workType: 'chore', userFacing: false } }),
   ];
   const out = prLedger({ buckets, prs });
-  assert.match(out, /### Checkout — checkout work \(1 PRs\)/);
-  assert.match(out, /#1 "PR 1" — alice · feature \[flag:new-co\]/);
-  assert.match(out, /summary: rebuilt cart/); // classified PRs prefer the LLM summary
-  assert.match(out, /Unbucketed \/ unclassified \(1 PRs\)/);
+  assert.match(out, /### Checkout — checkout work \(2 PRs\)/);
+  assert.match(out, /#1 "PR 1" — alice · feature · user-facing · flag:new-co/);
+  assert.match(out, /→ rebuilt cart/); // no userImpact → falls back to the summary
+  assert.match(out, /other \(internal\/chore, titles only\): #2 PR 2/);
 });
 
-test('prLedger caps the listing but tells the reader how many were omitted', () => {
-  const prs = Array.from({ length: 160 }, (_, i) => pr(i + 1));
+test('prLedger caps the internal/chore list and notes the remainder', () => {
+  const prs = Array.from({ length: 60 }, (_, i) => pr(i + 1, { ann: { workType: 'chore', userFacing: false } }));
   const out = prLedger({ buckets: [], prs });
-  assert.match(out, /and 10 more merged PRs not listed/);
+  assert.match(out, /\+10 more/); // 60 internal, 50 listed
+});
+
+test('prLedger compact mode drops the internal/chore titles entirely', () => {
+  const prs = [
+    pr(1, { ann: { workType: 'feature', userFacing: true, userImpact: 'X' } }),
+    pr(2, { ann: { workType: 'chore', userFacing: false } }),
+  ];
+  const out = prLedger({ buckets: [], prs, includeOther: false });
+  assert.match(out, /#1 "PR 1"/);
+  assert.doesNotMatch(out, /other \(internal\/chore/);
+  assert.match(out, /\(\+1 internal\/chore PRs — see stats\)/);
 });
 
 test('prLedger ignores PRs that never merged', () => {
@@ -137,25 +152,19 @@ test('buildSummarizeMessages shows the deterministic conventional-commit hint', 
   assert.match(user, /conventional commit: feat\(connectors\) — BREAKING CHANGE/);
 });
 
-test('prLedger falls back to the conventional-commit type and breaking signal when unsummarized', () => {
+test('prLedger surfaces a conventional-commit breaking change even when unsummarized', () => {
   const prs = [pr(5, { ann: undefined, conventional: { type: 'feat', scope: '', breaking: true, subject: 'x' } })];
   const out = prLedger({ buckets: [], prs });
-  assert.match(out, /⚠ breaking #5/); // breaking surfaced from the commit even without a summary
-  assert.match(out, /· feat \(cc\)/); // type hint from the conventional commit
+  assert.match(out, /⚠ #5 "PR 5" — alice · feat/); // breaking marker + cc type, no summary needed
 });
 
-test('prLedger surfaces detail, comments, markers (breaking/security/highlight), user-facing tag and impact', () => {
+test('prLedger shows breaking/security/highlight markers, category, and the one-line impact', () => {
   const prs = [pr(9, {
-    comments: [{}, {}, {}],
-    ann: { workType: 'feature', userFacing: true, breaking: true, security: true, highlight: true, userImpact: 'Users can now export blueprints as raw JSON.', detail: 'Big rework of the cart.', risk: 'high' },
+    ann: { workType: 'feature', userFacing: true, breaking: true, security: true, highlight: true, changelogCategory: 'removed', userImpact: 'The v1 export is gone; migrate to v2.', risk: 'high' },
   })];
   const out = prLedger({ buckets: [], prs });
-  assert.match(out, /⚠ breaking 🔒 security ★ #9 "PR 9"/);
-  assert.match(out, /· user-facing/);
-  assert.match(out, /3 comments/);
-  assert.match(out, /high risk/);
-  assert.match(out, /user impact: Users can now export blueprints as raw JSON\./);
-  assert.match(out, /detail: Big rework of the cart\./);
+  assert.match(out, /⚠ 🔒 ★ #9 "PR 9" — alice · feature · removed · user-facing · high risk/);
+  assert.match(out, /→ The v1 export is gone; migrate to v2\./);
 });
 
 test('buildReportMessages frames the report as product notes and forbids the "unclassified" cop-out', () => {
@@ -176,7 +185,7 @@ test('buildReportMessages frames the report as product notes and forbids the "un
 
 test('buildReportMessages embeds the deterministic ledger in the user turn', () => {
   const messages = buildReportMessages({
-    repo, sprint, stats: emptyStats, buckets: [], prs: [pr(101)], tools: [],
+    repo, sprint, stats: emptyStats, buckets: [], prs: [pr(101, { ann: { workType: 'feature', userFacing: true, userImpact: 'New thing.' } })], tools: [],
   });
   const user = messages.find((m) => m.role === 'user').content;
   assert.match(user, /MERGED PRS \(deterministic/);

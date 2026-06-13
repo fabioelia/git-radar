@@ -218,12 +218,12 @@ To call a tool, reply with ONLY this JSON and nothing else:
 You will receive the result and may call another tool (at most 5 calls total). When you have what you need — or if the tools fail — reply with the final markdown report (no JSON wrapper). Only include a "Planned vs actual" section if tool data actually came back.`;
 }
 
-export function buildReportMessages({ repo, sprint, stats, buckets, prs, tools }) {
+export function buildReportMessages({ repo, sprint, stats, buckets, prs, tools, compact = false }) {
   const system = `You are Git Radar's sprint analyst. Write **product notes** for this release cycle in GitHub-flavored markdown — what shipped and why it matters — for a product owner to skim. Concrete and skimmable, under ~750 words.
 
 Rules:
 - Use ONLY the numbers in the stats JSON for aggregate counts, hours and percentages — never invent them.
-- The MERGED PRS ledger below the stats is deterministic ground truth: titles, authors, work types, changed files, and — when a PR has been summarized — its per-PR "user impact" line, ⚠ breaking and 🔒 security markers, and ★ highlight marker. Use it to say concretely what shipped, and cite PRs like #123.
+- The MERGED PRS ledger below the stats is deterministic ground truth, grouped by area. Notable PRs (user-facing / breaking / security / highlighted) get a line with author, type, ⚠ breaking / 🔒 security / ★ highlight markers and a one-line user impact; routine internal/chore PRs are listed compactly by number + title. Use it to say concretely what shipped and cite PRs like #123; for churn and file-level detail rely on the stats and per-area numbers.
 - Lead with VALUE, not mechanics. Write user-facing changes in plain product/customer language ("Users can now…"), never implementation jargon, internal ticket IDs or codenames. Keep what end users see separate from changes aimed at developers/admins/integrators (use the per-PR audience tag) and from internal/under-the-hood work.
 - Be specific. NEVER write filler like "various bug fixes", "misc improvements" or "improved performance" with no specifics — name the concrete change or scenario. Do NOT paste raw PR titles as entries; rephrase each into the reader-facing value.
 - Group related PRs into product areas/themes (e.g. Connectors, Blueprints, Integrations). Buckets in the stats are these themes when present; if PRs are unclassified, INFER the areas and the user impact from titles, descriptions and changed files. Never answer "unclassified" — that is a non-answer; do the grouping yourself.
@@ -246,8 +246,8 @@ ${repoContextBlock(repo)}${buildToolInstructions(tools)}`;
 STATS (computed deterministically — trust these):
 ${JSON.stringify(compactStats(stats))}
 
-MERGED PRS (deterministic — title, author, work type, churn, changed files, and per-PR user impact + ⚠ breaking / 🔒 security / ★ highlight markers when summarized; grouped by area, with unclassified PRs listed explicitly):
-${prLedger({ buckets, prs })}
+MERGED PRS (deterministic, grouped by area — notable PRs get author, type, markers and a one-line user impact; routine internal/chore PRs are listed compactly by number + title):
+${prLedger({ buckets, prs, charCap: compact ? 12000 : 26000, includeOther: !compact })}
 
 Write the report now.`;
 
@@ -265,72 +265,78 @@ Write the report now.`;
  * always has the raw "what shipped, by whom, touching what" material to work
  * from, never just aggregate counts.
  */
-export function prLedger({ buckets, prs, cap = 150 }) {
+/**
+ * A deterministic, COMPACT digest of the merged PRs for the report prompt.
+ *
+ * Large sprints (100+ PRs, each with a multi-sentence detail) blow past a local
+ * model's context window, which silently truncates the prompt and wrecks the
+ * output. So this is deliberately lean: the verbose per-PR `detail`, file list
+ * and churn live in the inspector and the deterministic stats — NOT here.
+ *
+ * Two tiers keep the product-relevant signal while bounding size:
+ *  - PRIMARY (user-facing, breaking, security, highlighted, deprecated/removed,
+ *    or high-risk) get a full line + their one-line user impact.
+ *  - everything else (internal/chore/infra) is collapsed to a compact
+ *    "#num title" list per area, so the report still sees it without the bulk.
+ * A hard character cap is the final backstop.
+ */
+export function prLedger({ buckets, prs, charCap = 26000, includeOther = true }) {
   const merged = prs.filter((p) => p.mergedAt);
-  const shown = merged.slice(0, cap);
 
-  const byBucket = new Map();
-  const unbucketed = [];
-  for (const pr of shown) {
-    if (pr.bucketId) {
-      if (!byBucket.has(pr.bucketId)) byBucket.set(pr.bucketId, []);
-      byBucket.get(pr.bucketId).push(pr);
-    } else {
-      unbucketed.push(pr);
-    }
-  }
+  const groups = [
+    ...buckets.map((b) => ({ name: b.name, description: b.description, match: (p) => p.bucketId === b.id })),
+    { name: 'Unbucketed / unclassified', description: '', match: (p) => !p.bucketId },
+  ];
 
   const sections = [];
-  for (const b of buckets) {
-    const list = byBucket.get(b.id);
-    if (!list?.length) continue;
-    const head = `### ${b.name}${b.description ? ` — ${truncate(b.description, 100)}` : ''} (${list.length} PRs)`;
-    sections.push(`${head}\n${list.map(prLedgerLine).join('\n')}`);
-  }
-  if (unbucketed.length) {
-    sections.push(`### Unbucketed / unclassified (${unbucketed.length} PRs)\n${unbucketed.map(prLedgerLine).join('\n')}`);
+  for (const g of groups) {
+    const inGroup = merged.filter(g.match);
+    if (!inGroup.length) continue;
+    const primary = inGroup.filter(isPrimaryPr);
+    const other = inGroup.filter((p) => !isPrimaryPr(p));
+
+    const lines = [`### ${g.name}${g.description ? ` — ${truncate(g.description, 80)}` : ''} (${inGroup.length} PRs)`];
+    for (const p of primary) lines.push(primaryLine(p));
+    if (includeOther && other.length) {
+      const shown = other.slice(0, 50).map((p) => `#${p.number} ${truncate(p.title, 56)}`).join('; ');
+      const extra = other.length > 50 ? `; +${other.length - 50} more` : '';
+      lines.push(`  other (internal/chore, titles only): ${shown}${extra}`);
+    } else if (other.length) {
+      lines.push(`  (+${other.length} internal/chore PRs — see stats)`);
+    }
+    sections.push(lines.join('\n'));
   }
 
   let out = sections.join('\n\n') || '(no merged PRs in this window)';
-  if (merged.length > shown.length) {
-    out += `\n\n…and ${merged.length - shown.length} more merged PRs not listed individually (all counted in the stats totals above).`;
+  if (out.length > charCap) {
+    out = `${out.slice(0, charCap)}\n…(ledger trimmed to fit the model's context — full counts are in the stats above)`;
   }
   return out;
 }
 
-function prLedgerLine(pr) {
-  const ann = pr.ann || {};
-  // Fall back to the deterministic conventional-commit type/breaking signal
-  // when a PR hasn't been summarized yet.
-  const type = ann.workType || (pr.conventional ? `${pr.conventional.type} (cc)` : 'unclassified');
-  const breaking = ann.breaking || pr.conventional?.breaking;
-  const flag = ann.behindFlag ? ` [flag${ann.flagName ? `:${ann.flagName}` : ''}]` : '';
-  const comments = pr.comments?.length ? ` · ${pr.comments.length} comments` : '';
-  const risk = ann.risk ? ` · ${ann.risk} risk` : '';
-  const aud = ann.audience && ann.audience !== 'internal' ? ` · ${ann.audience.replace('_', '-')}` : '';
-  const facing = ann.workType ? (ann.userFacing ? ' · user-facing' : ' · internal') : '';
-  const markers = `${breaking ? '⚠ breaking ' : ''}${ann.security ? '🔒 security ' : ''}${ann.highlight ? '★ ' : ''}`;
-  const lines = [
-    `${markers}#${pr.number} "${truncate(pr.title, 120)}" — ${pr.author} · ${type}${flag}${facing}${aud}${risk}`,
-    `   ${pr.base || '?'} ← ${truncate(pr.head || '?', 50)} · merged ${pr.mergedAt ? isoDate(pr.mergedAt) : '?'} · +${pr.additions}/-${pr.deletions} in ${pr.changedFiles} files${comments}`,
-  ];
-  if (ann.userImpact) lines.push(`   user impact: ${truncate(String(ann.userImpact).replace(/\s+/g, ' '), 200)}`);
+/** PRs that carry product signal worth a full line (and their user impact). */
+export function isPrimaryPr(p) {
+  const a = p.ann || {};
+  return Boolean(
+    a.userFacing || a.security || a.highlight || a.breaking || p.conventional?.breaking
+    || a.risk === 'high' || a.changelogCategory === 'deprecated' || a.changelogCategory === 'removed',
+  );
+}
 
-  const paths = pr.files?.length
-    ? pr.files.slice(0, 6).map((f) => (typeof f === 'string' ? f : f.path))
-    : (pr.dirs || []).map((d) => `${d.dir} (${d.files})`);
-  if (paths.length) {
-    const more = pr.files?.length > 6 ? ` … (+${pr.files.length - 6} files)` : '';
-    lines.push(`   files: ${truncate(paths.join(', '), 240)}${more}`);
-  }
+function primaryLine(p) {
+  const a = p.ann || {};
+  const breaking = a.breaking || p.conventional?.breaking;
+  const markers = `${breaking ? '⚠ ' : ''}${a.security ? '🔒 ' : ''}${a.highlight ? '★ ' : ''}`;
+  const bits = [a.workType || p.conventional?.type || 'unclassified'];
+  if (a.changelogCategory && !['none', 'added', 'fixed'].includes(a.changelogCategory)) bits.push(a.changelogCategory);
+  if (a.userFacing) bits.push('user-facing');
+  else if (a.audience && a.audience !== 'internal') bits.push(a.audience.replace('_', '-'));
+  if (a.behindFlag) bits.push(`flag${a.flagName ? `:${a.flagName}` : ''}`);
+  if (a.risk === 'high' || a.risk === 'medium') bits.push(`${a.risk} risk`);
 
-  // Prefer the LLM's multi-sentence detail; fall back to the one-liner, then body.
-  const desc = ann.detail || ann.summary || pr.body;
-  if (desc) {
-    const label = ann.detail ? 'detail' : ann.summary ? 'summary' : 'body';
-    lines.push(`   ${label}: ${truncate(String(desc).replace(/\s+/g, ' '), 280)}`);
-  }
-  return lines.join('\n');
+  const head = `${markers}#${p.number} "${truncate(p.title, 100)}" — ${p.author} · ${bits.join(' · ')}`;
+  const impactText = a.userImpact || a.summary;
+  return impactText ? `${head}\n   → ${truncate(String(impactText).replace(/\s+/g, ' '), 160)}` : head;
 }
 
 /** Trim the stats object so it fits comfortably in a local model's context. */

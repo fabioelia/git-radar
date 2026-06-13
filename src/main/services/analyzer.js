@@ -303,6 +303,16 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
       });
     }
 
+    // Reliability backstop: a too-large prompt can overflow a local model's
+    // context and yield a degenerate, heading-less response (e.g. "Okay").
+    // If that happens, retry once with a deliberately slim, tool-free prompt.
+    if (looksDegenerateReport(markdown)) {
+      emit({ task: 'report', message: 'Report came back empty — retrying with a slimmer prompt…' });
+      const slim = buildReportMessages({ repo, sprint, stats, buckets: data.buckets, prs: data.prs, tools: [], compact: true });
+      const retry = await loggedChat(sprintId, data, 'report', 'retry (compact prompt)', { messages: slim, temperature: 0.3 });
+      if (!looksDegenerateReport(retry) || !markdown) markdown = retry;
+    }
+
     const report = {
       id: uid(),
       createdAt: new Date().toISOString(),
@@ -319,6 +329,11 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
 }
 
 // ---- pure helpers (exported for tests) ----
+
+/** A real report has markdown section headings; "Okay"-style failures don't. */
+export function looksDegenerateReport(md) {
+  return !md || !/(^|\n)#{1,6}\s/.test(String(md));
+}
 
 export function pushLog(data, entry) {
   data.llmLog = [entry, ...(data.llmLog || [])].slice(0, LLM_LOG_LIMIT);

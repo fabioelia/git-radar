@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createAnalyzer, applyClassifications, applyReorgOps, findOrCreateBucket, pruneEmptyBuckets,
+  createAnalyzer, applyClassifications, applyReorgOps, findOrCreateBucket, pruneEmptyBuckets, looksDegenerateReport,
 } from '../src/main/services/analyzer.js';
 
 function memStore({ repo, sprint, data, settings = {} }) {
@@ -290,6 +290,23 @@ test('report runs the MCP tool loop then saves the markdown', async () => {
   assert.deepEqual(log.map((e) => e.meta), ['after tool turn 1', 'initial prompt']);
   assert.equal(log[1].messages.length, 2); // initial turn: system + user only
   assert.equal(log[0].messages.length, 4); // after tool result was appended
+});
+
+test('report retries with a slimmer prompt when the model returns a degenerate response', async () => {
+  assert.equal(looksDegenerateReport('Okay'), true);
+  assert.equal(looksDegenerateReport('## Headlines\n- x'), false);
+
+  const classified = pr(1, { bucketId: 'a', ann: { workType: 'feature', userFacing: true, userImpact: 'X' } });
+  const store = memStore({ repo, sprint, data: { prs: [classified], buckets: [{ id: 'a', name: 'Checkout' }], reports: [] } });
+  let turn = 0;
+  const ollama = {
+    chat: async () => { turn += 1; return turn === 1 ? 'Okay' : '## Headlines\n- shipped checkout'; },
+  };
+  const analyzer = createAnalyzer({ store, ollama, github: {}, mcp: {} });
+  const report = await analyzer.generateReport('s1');
+  assert.equal(turn, 2); // initial degenerate response + one compact retry
+  assert.match(report.markdown, /## Headlines/);
+  assert.equal(store.peek().llmLog[0].meta, 'retry (compact prompt)');
 });
 
 test('report works with no MCP servers configured', async () => {

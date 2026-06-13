@@ -161,6 +161,19 @@ Sources: Keep a Changelog (keepachangelog.com), Common Changelog (common-changel
 Conventional Commits (conventionalcommits.org), Semantic Versioning (semver.org), GitHub PR
 best practices, and practitioner release-notes guides.
 
+### The report prompt is built to fit a local model's context window
+A big sprint (100+ PRs) with a full per-PR detail paragraph each easily exceeds a local
+model's `num_ctx`; Ollama then silently truncates the prompt, the system instructions fall
+off the front, and the model emits a degenerate response (a bare "Okay"). So the report
+leans on the **deterministic stats** (highlights, breaking/security lists, per-area counts)
+and keeps the PR ledger **compact and bounded**: notable PRs (user-facing / breaking /
+security / highlighted / high-risk) get one line plus a one-line user impact, while routine
+internal PRs collapse to a "#num title" list — the verbose `detail`, file lists and churn
+stay in the inspector and the stats, not the prompt. A hard character cap is the backstop,
+and if a report still comes back heading-less the generator retries once with an even
+slimmer, tool-free prompt. This keeps a 100-PR report prompt around ~4–5k tokens instead of
+~22k.
+
 ### Sprints are explicit windows
 Each repo has a cycle length (default 3 weeks). A sprint is a stored {start, end}
 window; "New sprint" rolls over from the previous end date. Buckets live per sprint —
