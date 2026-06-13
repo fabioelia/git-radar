@@ -110,6 +110,32 @@ test('breaking changes and security fixes are surfaced deterministically', () =>
   assert.deepEqual(stats.securityFixes.map((s) => s.number), [2]);
 });
 
+test('conventional-commit header marks a PR breaking even without a summary', () => {
+  const items = [
+    pr(1, { conventional: { type: 'feat', scope: '', breaking: true, subject: 'x' } }), // not summarized
+    pr(2, { ann: { workType: 'feature', userFacing: true }, conventional: { type: 'feat', scope: '', breaking: false, subject: 'y' } }),
+  ];
+  const stats = computeStats({ sprint, prs: items, buckets });
+  assert.equal(stats.totals.breaking, 1);
+  assert.deepEqual(stats.breakingChanges.map((b) => b.number), [1]); // deterministic floor
+});
+
+test('changelog categories, deprecations/removals and audience breakdown', () => {
+  const items = [
+    pr(1, { bucketId: 'b1', ann: { workType: 'feature', userFacing: true, changelogCategory: 'added', audience: 'end_user' } }),
+    pr(2, { bucketId: 'b1', ann: { workType: 'chore', userFacing: false, changelogCategory: 'deprecated', audience: 'developer', userImpact: 'v1 API deprecated' } }),
+    pr(3, { bucketId: 'b1', ann: { workType: 'refactor', userFacing: true, changelogCategory: 'removed', audience: 'developer' } }),
+    pr(4, { bucketId: 'b1', ann: { workType: 'defect', userFacing: true, changelogCategory: 'fixed', audience: 'end_user' } }),
+  ];
+  const stats = computeStats({ sprint, prs: items, buckets });
+  assert.equal(stats.totals.byChangelogCategory.added, 1);
+  assert.equal(stats.totals.byChangelogCategory.deprecated, 1);
+  assert.equal(stats.totals.byAudience.end_user, 2);
+  assert.equal(stats.totals.byAudience.developer, 2);
+  assert.deepEqual(stats.deprecations.map((d) => d.number), [2]);
+  assert.deepEqual(stats.removals.map((r) => r.number), [3]);
+});
+
 test('empty sprint produces sane zeros', () => {
   const stats = computeStats({ sprint, prs: [], buckets: [] });
   assert.equal(stats.totals.prs, 0);

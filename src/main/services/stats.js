@@ -6,6 +6,10 @@ import { hoursBetween, isoDate, addDays, uniq } from './util.js';
 export function computeStats({ sprint, prs, buckets }) {
   const merged = prs.filter((p) => p.mergedAt);
 
+  // Breaking is true if the summarizer flagged it OR the conventional-commit
+  // header/footer declared it — a deterministic floor so it can't be buried.
+  const isBreaking = (p) => Boolean(p.ann?.breaking) || Boolean(p.conventional?.breaking);
+
   const totals = {
     prs: merged.length,
     contributors: uniq(merged.map((p) => p.author)).length,
@@ -18,8 +22,11 @@ export function computeStats({ sprint, prs, buckets }) {
     // Product lens: what users can see, and net-new user-facing capability.
     userFacing: merged.filter((p) => p.ann?.userFacing).length,
     shippedToUsers: merged.filter((p) => p.ann?.userFacing && p.ann?.workType === 'feature').length,
-    breaking: merged.filter((p) => p.ann?.breaking).length,
+    breaking: merged.filter(isBreaking).length,
     security: merged.filter((p) => p.ann?.security).length,
+    // Release-notes (Keep a Changelog) category + audience breakdowns.
+    byChangelogCategory: countBy(merged.filter((p) => p.ann?.changelogCategory), (p) => p.ann.changelogCategory),
+    byAudience: countBy(merged.filter((p) => p.ann?.audience), (p) => p.ann.audience),
   };
 
   const flagPr = (p) => ({
@@ -32,7 +39,9 @@ export function computeStats({ sprint, prs, buckets }) {
   // Announce-worthy changes the analyst should lead with.
   const highlights = merged.filter((p) => p.ann?.highlight).map(flagPr);
   // Must-never-bury changes — surfaced deterministically so the report can't miss them.
-  const breakingChanges = merged.filter((p) => p.ann?.breaking).map(flagPr);
+  const breakingChanges = merged.filter(isBreaking).map(flagPr);
+  const deprecations = merged.filter((p) => p.ann?.changelogCategory === 'deprecated').map(flagPr);
+  const removals = merged.filter((p) => p.ann?.changelogCategory === 'removed').map(flagPr);
   const securityFixes = merged.filter((p) => p.ann?.security).map(flagPr);
 
   const perBucket = buckets
@@ -50,6 +59,8 @@ export function computeStats({ sprint, prs, buckets }) {
     totals,
     highlights,
     breakingChanges,
+    deprecations,
+    removals,
     securityFixes,
     perBucket,
     defectChasing,

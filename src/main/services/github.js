@@ -101,7 +101,27 @@ function normalizePR(raw) {
     milestone: raw.milestone?.title || null,
     dirs: summarizeDirs(raw.files),
     files: topFiles(raw.files),
+    conventional: parseConventionalCommit(raw.title, raw.body),
   };
+}
+
+const CC_TYPES = new Set(['feat', 'fix', 'build', 'chore', 'ci', 'docs', 'style', 'refactor', 'perf', 'test', 'revert']);
+
+/**
+ * Parse a Conventional Commits header (`type(scope)!: subject`) from the PR
+ * title, plus the `BREAKING CHANGE:` footer from the body. This is a
+ * deterministic signal — type and, crucially, backward-incompatibility — that
+ * doesn't depend on the LLM: a `feat!:` or a BREAKING-CHANGE footer flags a
+ * breaking change even before (or if) a PR is summarized, so it can't be
+ * buried. Returns null when the title isn't a recognized conventional commit.
+ */
+export function parseConventionalCommit(title = '', body = '') {
+  const m = /^([a-zA-Z]+)(?:\(([^)]+)\))?(!)?:\s+(.+)$/.exec(String(title).trim());
+  if (!m) return null;
+  const type = m[1].toLowerCase();
+  if (!CC_TYPES.has(type)) return null; // avoid false positives like "Note: ..."
+  const breaking = Boolean(m[3]) || /(^|\n)BREAKING[ -]CHANGE:/.test(String(body));
+  return { type, scope: m[2] || '', breaking, subject: m[4] };
 }
 
 /**

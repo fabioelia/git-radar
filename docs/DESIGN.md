@@ -138,9 +138,15 @@ changelog practice rather than ad-hoc prompt wording:
   titles are never pasted verbatim; they are rephrased into value. (Keep a Changelog bad
   practices; Common Changelog rule "don't use `git log` output".)
 - **Never bury breaking changes, deprecations or security fixes.** Each PR carries
-  `breaking` and `security` flags; the report surfaces them in a dedicated section up top,
-  with the action a reader must take. (Semantic Versioning / Conventional Commits treat
-  breaking changes as first-class; Keep a Changelog makes Security a category.)
+  `breaking`/`security` flags and a Keep a Changelog `changelog_category`
+  (added/changed/deprecated/removed/fixed/security); the report surfaces breaking changes,
+  removals, deprecations and security fixes in a dedicated section up top, with the action a
+  reader must take. **Breaking is also detected deterministically** by parsing Conventional
+  Commit titles (`feat!:`, `fix(x)!:`) and `BREAKING CHANGE:` footers, so a breaking change
+  is flagged even before — or if — a PR is summarized. (Semantic Versioning / Conventional
+  Commits treat breaking changes as first-class; Keep a Changelog makes Security a category.)
+- **Segment by audience.** Each PR is tagged `audience` (end-user / developer / admin /
+  internal) so end-user release notes stay separate from developer/admin/API-facing changes.
 - **Result-oriented user-impact voice.** The per-PR `user_impact` line is one concrete,
   result-oriented sentence ("Users can now…", "Long messages are no longer truncated");
   performance/reliability gains users feel count as user-facing. (Quiet release-notes guide.)

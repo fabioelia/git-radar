@@ -115,16 +115,33 @@ test('PR_SUMMARY_SCHEMA requires the planning + product fields and has breaking/
   assert.equal(PR_SUMMARY_SCHEMA.properties.highlight.type, 'boolean');
   assert.equal(PR_SUMMARY_SCHEMA.properties.breaking.type, 'boolean');
   assert.equal(PR_SUMMARY_SCHEMA.properties.security.type, 'boolean');
+  assert.deepEqual(PR_SUMMARY_SCHEMA.properties.changelog_category.enum,
+    ['added', 'changed', 'deprecated', 'removed', 'fixed', 'security', 'none']);
+  assert.deepEqual(PR_SUMMARY_SCHEMA.properties.audience.enum,
+    ['end_user', 'developer', 'admin', 'internal']);
 });
 
-test('buildSummarizeMessages asks for specific user impact, breaking/security flags and a highlight', () => {
+test('buildSummarizeMessages asks for Keep-a-Changelog category, audience, impact and flags', () => {
   const system = buildSummarizeMessages({ repo: { owner: 'a', name: 'b' }, buckets: [], pr: pr(1, { comments: [] }) })[0].content;
   assert.match(system, /user_impact: if user_facing/);
-  assert.match(system, /release-notes voice/);
   assert.match(system, /never vague filler like "various fixes"/);
+  assert.match(system, /changelog_category: the Keep a Changelog category/);
+  assert.match(system, /audience: who the change is primarily for/);
   assert.match(system, /breaking: true if this is backward-incompatible/);
   assert.match(system, /security: true if it fixes a vulnerability/);
-  assert.match(system, /highlight: true only for a genuinely notable/);
+});
+
+test('buildSummarizeMessages shows the deterministic conventional-commit hint', () => {
+  const withCc = pr(1, { comments: [], conventional: { type: 'feat', scope: 'connectors', breaking: true, subject: 'x' } });
+  const user = buildSummarizeMessages({ repo: { owner: 'a', name: 'b' }, buckets: [], pr: withCc })[1].content;
+  assert.match(user, /conventional commit: feat\(connectors\) — BREAKING CHANGE/);
+});
+
+test('prLedger falls back to the conventional-commit type and breaking signal when unsummarized', () => {
+  const prs = [pr(5, { ann: undefined, conventional: { type: 'feat', scope: '', breaking: true, subject: 'x' } })];
+  const out = prLedger({ buckets: [], prs });
+  assert.match(out, /⚠ breaking #5/); // breaking surfaced from the commit even without a summary
+  assert.match(out, /· feat \(cc\)/); // type hint from the conventional commit
 });
 
 test('prLedger surfaces detail, comments, markers (breaking/security/highlight), user-facing tag and impact', () => {
@@ -148,7 +165,7 @@ test('buildReportMessages frames the report as product notes and forbids the "un
   const system = messages.find((m) => m.role === 'system').content;
   assert.match(system, /product notes/i);
   assert.match(system, /## Headlines/);
-  assert.match(system, /## Breaking changes & security/);
+  assert.match(system, /## Breaking changes, deprecations & security/);
   assert.match(system, /## New for users/);
   assert.match(system, /## Invisible this sprint/);
   assert.match(system, /Never answer "unclassified"/);

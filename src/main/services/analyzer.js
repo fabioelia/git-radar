@@ -363,6 +363,8 @@ export function applyClassifications(data, classifications) {
       summary: String(c.summary || ''),
       detail: String(c.detail || ''),
       userImpact: String(c.user_impact || ''),
+      changelogCategory: ['added', 'changed', 'deprecated', 'removed', 'fixed', 'security', 'none'].includes(c.changelog_category) ? c.changelog_category : undefined,
+      audience: ['end_user', 'developer', 'admin', 'internal'].includes(c.audience) ? c.audience : undefined,
       breaking: Boolean(c.breaking),
       security: Boolean(c.security),
       highlight: Boolean(c.highlight),

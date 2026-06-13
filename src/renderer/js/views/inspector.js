@@ -48,7 +48,9 @@ function annBlock(pr, bucket, m) {
           ${a.breaking ? '<span class="chip breaking">⚠ breaking</span>' : ''}
           ${a.security ? '<span class="chip security">🔒 security</span>' : ''}
           <span class="chip">${escapeHtml(a.workType || '?')}</span>
+          ${a.changelogCategory && a.changelogCategory !== 'none' ? `<span class="chip">${escapeHtml(a.changelogCategory)}</span>` : ''}
           <span class="chip">${a.userFacing ? 'user-facing' : 'internal'}</span>
+          ${a.audience && a.audience !== 'end_user' ? `<span class="chip">${escapeHtml(a.audience.replace('_', '-'))}</span>` : ''}
           ${bucket ? `<span class="chip">${escapeHtml(bucket.name)}</span>` : '<span class="muted">no bucket</span>'}
           ${a.risk ? `<span class="chip risk-${a.risk}">${escapeHtml(a.risk)} risk</span>` : ''}
           ${a.behindFlag ? `<span class="chip flag">🚩${a.flagName ? ` ${escapeHtml(a.flagName)}` : ''}</span>` : ''}

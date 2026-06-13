@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summarizeDirs, topFiles, normalizeComments } from '../src/main/services/github.js';
+import {
+  summarizeDirs, topFiles, normalizeComments, parseConventionalCommit,
+} from '../src/main/services/github.js';
 
 test('summarizeDirs condenses monorepo paths to leading segments', () => {
   const files = [
@@ -57,6 +59,27 @@ test('normalizeComments merges issue comments, reviews and inline comments chron
   assert.deepEqual(out.map((c) => c.kind), ['review_comment', 'comment', 'review']); // sorted by time
   assert.equal(out[0].path, 'src/x.ts');
   assert.equal(out[2].state, 'changes_requested');
+});
+
+test('parseConventionalCommit extracts type, scope and breaking signal', () => {
+  assert.deepEqual(parseConventionalCommit('feat(connectors): add Meta Ads connector'),
+    { type: 'feat', scope: 'connectors', breaking: false, subject: 'add Meta Ads connector' });
+
+  // bang marks a breaking change
+  assert.equal(parseConventionalCommit('feat!: drop v1 auth').breaking, true);
+
+  // BREAKING CHANGE footer in the body also marks breaking
+  assert.equal(parseConventionalCommit('refactor: rework auth', 'body\n\nBREAKING CHANGE: tokens reset').breaking, true);
+
+  // fix without scope
+  assert.deepEqual(parseConventionalCommit('fix: guard null promo'),
+    { type: 'fix', scope: '', breaking: false, subject: 'guard null promo' });
+});
+
+test('parseConventionalCommit returns null for non-conventional titles', () => {
+  assert.equal(parseConventionalCommit('Add Meta Ads connector'), null); // no type prefix
+  assert.equal(parseConventionalCommit('Note: this is not a CC type'), null); // unknown type
+  assert.equal(parseConventionalCommit(''), null);
 });
 
 test('normalizeComments tolerates empty/missing input and caps the list', () => {

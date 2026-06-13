@@ -35,8 +35,12 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
    **discussion** (issue comments, review verdicts and inline review comments — all pulled
    deterministically): bucket, work type (feature/defect/chore/infra/…), behind-flag + flag
    name, user-facing, a one-line summary, a 2–4 sentence **detail** (what changed, why, risk,
-   follow-ups), a release-notes-voice **user impact** line, **breaking** / **security**
-   flags, a **highlight** flag for announce-worthy changes, and a **risk** read. Buckets are *topics*, never types — a checkout bug fix
+   follow-ups), a release-notes-voice **user impact** line, a **Keep a Changelog category**
+   (added/changed/deprecated/removed/fixed/security), an **audience** (end-user / developer /
+   admin / internal), **breaking** / **security** flags, a **highlight** flag for
+   announce-worthy changes, and a **risk** read. Breaking changes are *also* detected
+   deterministically from **Conventional Commit** titles (`feat!:`, `BREAKING CHANGE:`), so
+   they're flagged even before a PR is summarized. Buckets are *topics*, never types — a checkout bug fix
    lands in the **Checkout** bucket as a `defect`, so defect-chasing time aggregates per
    feature. Buckets get reorganized (merged/renamed) by a second LLM pass when they
    proliferate.
