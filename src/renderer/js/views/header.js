@@ -35,6 +35,7 @@ export function sprintHeader(state) {
       <nav class="tabs">
         <button class="tab ${state.view === 'radar' ? 'active' : ''}" data-action="tab" data-view="radar">Radar</button>
         <button class="tab ${state.view === 'report' ? 'active' : ''}" data-action="tab" data-view="report">Report${d.reports.length ? ` (${d.reports.length})` : ''}</button>
+        <button class="tab ${state.view === 'prompts' ? 'active' : ''}" data-action="tab" data-view="prompts" title="Every prompt sent to the local LLM, verbatim">Prompts${(d.llmLog || []).length ? ` (${d.llmLog.length})` : ''}</button>
       </nav>
       <div class="actionbar">
         ${busy

@@ -7,6 +7,7 @@ import { escapeHtml } from './util.js';
 import { sprintHeader } from './views/header.js';
 import { renderDashboard } from './views/dashboard.js';
 import { renderReport } from './views/report.js';
+import { renderPrompts, exchangeToText } from './views/prompts.js';
 import { renderSettings } from './views/settings.js';
 
 const state = {
@@ -95,7 +96,11 @@ function mainView() {
     </section>`;
   }
   if (!state.data) return '<section class="card empty-state"><h2>Pick a repository</h2></section>';
-  const body = state.view === 'report' ? renderReport(state) : renderDashboard(state);
+  const body = state.view === 'report'
+    ? renderReport(state)
+    : state.view === 'prompts'
+      ? renderPrompts(state)
+      : renderDashboard(state);
   return `${sprintHeader(state)}${body}`;
 }
 
@@ -375,6 +380,16 @@ const actions = {
   'recheck-health': async () => {
     state.health = await api.healthCheck();
     render();
+  },
+
+  'copy-exchange': async (el, e) => {
+    e.preventDefault(); // the button lives inside a <summary> — don't toggle it
+    e.stopPropagation();
+    const entry = (state.data?.llmLog || []).find((x) => x.id === el.dataset.id);
+    if (entry) {
+      await navigator.clipboard.writeText(exchangeToText(entry));
+      toast('ok', 'Exchange copied as text');
+    }
   },
 
   'copy-report': async () => {

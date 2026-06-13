@@ -411,6 +411,52 @@ label .input, label .select { color: var(--text); font-weight: 400; }
 .md a { color: var(--accent); }
 .md hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
 
+/* ---------- prompts (LLM transparency log) ---------- */
+
+.llm-entry { padding: 0; overflow: hidden; }
+.llm-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.llm-summary::-webkit-details-marker { display: none; }
+.llm-summary:hover { background: var(--card-2); }
+.llm-entry[open] .llm-summary { border-bottom: 1px solid var(--border); }
+.llm-meta { font-size: 13px; }
+.btn-small { padding: 3px 10px; font-size: 12px; }
+
+.llm-body { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
+.role-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.llm-msg.resp .role-label { color: var(--green); }
+.llm-msg.err .role-label { color: var(--red); }
+.prompt-pre {
+  margin: 0;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.llm-msg.resp .prompt-pre { border-color: rgba(61, 220, 151, 0.25); }
+.llm-msg.err .prompt-pre { border-color: rgba(255, 107, 107, 0.35); }
+
 /* ---------- settings ---------- */
 
 .form-grid {

@@ -176,7 +176,7 @@ export function createSprint(repoId, { startDate, endDate, name } = {}) {
 // ---- per-sprint data (PRs / buckets / reports) ----
 
 export function emptySprintData() {
-  return { prs: [], buckets: [], reports: [], lastSyncAt: null };
+  return { prs: [], buckets: [], reports: [], llmLog: [], lastSyncAt: null };
 }
 
 export function getSprintData(sprintId) {

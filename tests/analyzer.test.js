@@ -92,6 +92,26 @@ test('categorize batches PRs through the LLM and builds buckets', async () => {
   const again = await analyzer.categorize('s1');
   assert.equal(again.classified, 0);
   assert.equal(seenBatches.length, calls);
+
+  // the exchange is logged verbatim for the Prompts tab
+  const log = data.llmLog;
+  assert.equal(log.length, 1);
+  assert.equal(log[0].task, 'classify');
+  assert.equal(log[0].messages[0].role, 'system');
+  assert.match(log[0].messages[1].content, /Classify these 3 merged PRs/);
+  assert.match(log[0].response, /classifications/);
+  assert.ok(Number.isFinite(log[0].durationMs));
+});
+
+test('failed LLM calls are logged with the prompt and persisted', async () => {
+  const store = memStore({ repo, sprint, data: { prs: [pr(1)], buckets: [], reports: [] } });
+  const ollama = { chat: async () => { throw new Error('model exploded'); } };
+  const analyzer = createAnalyzer({ store, ollama, github: {}, mcp: {} });
+  await assert.rejects(() => analyzer.categorize('s1'), /model exploded/);
+  const log = store.peek().llmLog;
+  assert.equal(log.length, 1);
+  assert.equal(log[0].error, 'model exploded');
+  assert.equal(log[0].messages[0].role, 'system'); // the prompt that failed is preserved
 });
 
 test('reorganize applies merge/rename ops and prunes empty buckets', async () => {
@@ -159,6 +179,12 @@ test('report runs the MCP tool loop then saves the markdown', async () => {
   assert.equal(report.toolCalls.length, 1);
   assert.equal(report.toolCalls[0].ok, true);
   assert.equal(store.peek().reports.length, 1);
+
+  // both turns logged, newest first, with the mutated message array snapshotted
+  const log = store.peek().llmLog;
+  assert.deepEqual(log.map((e) => e.meta), ['after tool turn 1', 'initial prompt']);
+  assert.equal(log[1].messages.length, 2); // initial turn: system + user only
+  assert.equal(log[0].messages.length, 4); // after tool result was appended
 });
 
 test('report works with no MCP servers configured', async () => {

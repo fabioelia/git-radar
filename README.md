@@ -42,6 +42,10 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
    tools first — e.g. fetch Jira sprint priorities — and write a *planned vs. actual*
    section.
 
+4. **Prompts tab** — full transparency into the local LLM: every exchange is logged
+   verbatim (system + user messages sent, raw response, duration, failures included)
+   so you can always see exactly what Gemma was asked and how it answered.
+
 ## Requirements
 
 | Tool | Why | Setup |

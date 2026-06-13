@@ -72,6 +72,7 @@ export function registerIpc(getWindow, appInfo) {
       prs: data.prs,
       buckets: data.buckets,
       reports: data.reports || [],
+      llmLog: data.llmLog || [],
       lastSyncAt: data.lastSyncAt,
       stats: computeStats({ sprint, prs: data.prs, buckets: data.buckets }),
     };

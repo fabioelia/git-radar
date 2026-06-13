@@ -16,6 +16,7 @@ import { extractJson, extractToolCall, uid, truncate } from './util.js';
 const BATCH_SIZE = 10;
 const MAX_TOOL_CALLS = 5;
 const AUTO_REORG_THRESHOLD = 13;
+const LLM_LOG_LIMIT = 30;
 
 export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) {
   function load(sprintId) {
@@ -24,6 +25,36 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
     const repo = store.getRepo(sprint.repoId);
     if (!repo) throw new Error('Repo not found');
     return { sprint, repo, data: store.getSprintData(sprintId) };
+  }
+
+  /**
+   * Every Gemma call goes through here so the UI can show exactly what was
+   * sent and what came back (the Prompts tab). Failed calls are logged and
+   * persisted immediately — that's when transparency matters most.
+   */
+  async function loggedChat(sprintId, data, task, meta, chatArgs) {
+    const model = store.getSettings().ollamaModel;
+    const entry = {
+      id: uid(),
+      createdAt: new Date().toISOString(),
+      task,
+      meta,
+      model,
+      messages: chatArgs.messages.map((m) => ({ ...m })), // snapshot: the report loop mutates its array
+    };
+    const started = Date.now();
+    try {
+      entry.response = await ollama.chat(chatArgs);
+      entry.durationMs = Date.now() - started;
+      pushLog(data, entry);
+      return entry.response;
+    } catch (e) {
+      entry.error = e.message;
+      entry.durationMs = Date.now() - started;
+      pushLog(data, entry);
+      store.saveSprintData(sprintId, data);
+      throw e;
+    }
   }
 
   /** Fetch merged PRs for the sprint window; merge by number, keep annotations. */
@@ -87,7 +118,9 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
         buckets: bucketSummaries(data),
         prs: batches[i],
       });
-      const content = await ollama.chat({ messages, schema: CLASSIFY_SCHEMA });
+      const content = await loggedChat(sprintId, data, 'classify',
+        `batch ${i + 1}/${batches.length} · ${batches[i].length} PRs`,
+        { messages, schema: CLASSIFY_SCHEMA });
       const parsed = extractJson(content);
       classified += applyClassifications(data, parsed.classifications || []);
       store.saveSprintData(sprintId, data); // persist per batch — long runs survive interruption
@@ -118,7 +151,8 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
         samples: prsIn(data, b.id).slice(0, 6).map((p) => `#${p.number} ${p.title}`),
       })),
     });
-    const content = await ollama.chat({ messages, schema: REORG_SCHEMA });
+    const content = await loggedChat(sprintId, data, 'reorganize',
+      `${data.buckets.length} buckets`, { messages, schema: REORG_SCHEMA });
     const parsed = extractJson(content);
     const applied = applyReorgOps(data, parsed.operations || []);
     pruneEmptyBuckets(data);
@@ -149,7 +183,9 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
 
     let markdown = null;
     for (let turn = 0; turn <= MAX_TOOL_CALLS; turn += 1) {
-      const content = await ollama.chat({ messages, temperature: 0.4 });
+      const content = await loggedChat(sprintId, data, 'report',
+        turn === 0 ? 'initial prompt' : `after tool turn ${turn}`,
+        { messages, temperature: 0.4 });
       const call = tools.length ? extractToolCall(content) : null;
       if (!call || turn === MAX_TOOL_CALLS) {
         markdown = content;
@@ -188,6 +224,10 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
 }
 
 // ---- pure helpers (exported for tests) ----
+
+export function pushLog(data, entry) {
+  data.llmLog = [entry, ...(data.llmLog || [])].slice(0, LLM_LOG_LIMIT);
+}
 
 export function bucketSummaries(data) {
   return data.buckets.map((b) => ({
