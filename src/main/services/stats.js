@@ -15,7 +15,21 @@ export function computeStats({ sprint, prs, buckets }) {
     byType: countBy(merged, (p) => p.ann?.workType || 'unclassified'),
     avgCycleHours: avg(merged.map(cycleHours).filter(isFiniteNum)),
     behindFlag: merged.filter((p) => p.ann?.behindFlag).length,
+    // Product lens: what users can see, and net-new user-facing capability.
+    userFacing: merged.filter((p) => p.ann?.userFacing).length,
+    shippedToUsers: merged.filter((p) => p.ann?.userFacing && p.ann?.workType === 'feature').length,
   };
+
+  // Announce-worthy changes the analyst should lead with.
+  const highlights = merged
+    .filter((p) => p.ann?.highlight)
+    .map((p) => ({
+      number: p.number,
+      title: p.title,
+      bucket: buckets.find((b) => b.id === p.bucketId)?.name || null,
+      workType: p.ann?.workType || null,
+      userImpact: p.ann?.userImpact || '',
+    }));
 
   const perBucket = buckets
     .map((b) => bucketStats(b, merged.filter((p) => p.bucketId === b.id)))
@@ -30,6 +44,7 @@ export function computeStats({ sprint, prs, buckets }) {
 
   return {
     totals,
+    highlights,
     perBucket,
     defectChasing,
     hiddenWork,
@@ -56,6 +71,7 @@ function bucketStats(bucket, prs) {
     defectHours: sum(defects.map(cycleHours).filter(isFiniteNum), (h) => h),
     defectSharePct: prs.length ? Math.round((defects.length / prs.length) * 100) : 0,
     featureCount: features.length,
+    userFacingCount: prs.filter((p) => p.ann?.userFacing).length,
     flags: uniq(prs.map((p) => p.ann?.flagName).filter(Boolean)),
     // Built, but users can't see it: every feature PR flagged or not user-facing.
     hiddenFeature:

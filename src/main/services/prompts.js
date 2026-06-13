@@ -11,7 +11,7 @@ export const WORK_TYPES = ['feature', 'defect', 'chore', 'infra', 'docs', 'test'
 // prompt, this is each summary's "fingerprint": a PR is re-summarized only when
 // its fingerprint no longer matches the current one (we changed the template,
 // or you edited the release-cycle prompt) — never just because a scan ran again.
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 function djb2(s) {
   let h = 5381;
@@ -42,9 +42,11 @@ export const PR_SUMMARY_SCHEMA = {
     user_facing: { type: 'boolean' },
     summary: { type: 'string' },
     detail: { type: 'string' },
+    user_impact: { type: 'string' },
+    highlight: { type: 'boolean' },
     risk: { type: 'string', enum: ['low', 'medium', 'high'] },
   },
-  required: ['bucket', 'work_type', 'behind_flag', 'user_facing', 'summary', 'detail'],
+  required: ['bucket', 'work_type', 'behind_flag', 'user_facing', 'summary', 'detail', 'user_impact'],
 };
 
 export const REORG_SCHEMA = {
@@ -134,6 +136,8 @@ Fields:
 - user_facing: true only if end users can see or feel the change once released (false for internal tooling, refactors, flagged-off work).
 - summary: ONE plain-language sentence on what the PR did.
 - detail: 2–4 sentences for the team lead — what changed, why, and any risk or follow-up that is evident from the description, the changed files and the PR discussion. Ground every claim in the data provided; do not invent.
+- user_impact: if user_facing, ONE sentence in release-notes / changelog voice describing what the END USER can now do or see ("Users can now select a sheet when importing a data dictionary."). Write it for a product audience, not in implementation terms. If the change is internal, infra, a refactor, or flagged off, return "" (empty string).
+- highlight: true only for a genuinely notable, announce-worthy change — a new capability, a new integration/connector, or a fix to something users clearly felt. Most PRs are NOT highlights; be selective.
 - risk: low | medium | high — your read of release risk given the size, area touched and discussion.
 
 Respond with JSON matching the provided schema.`;
@@ -204,13 +208,21 @@ You will receive the result and may call another tool (at most 5 calls total). W
 }
 
 export function buildReportMessages({ repo, sprint, stats, buckets, prs, tools }) {
-  const system = `You are Git Radar's sprint analyst. Write a sprint report in GitHub-flavored markdown for the team lead. Be concrete and skimmable, under ~700 words.
+  const system = `You are Git Radar's sprint analyst. Write **product notes** for this release cycle in GitHub-flavored markdown — what shipped and why it matters — for a product owner to skim. Concrete and skimmable, under ~750 words.
 
 Rules:
-- Use ONLY the numbers provided in the stats JSON for aggregate counts, hours and percentages — never invent them.
-- The MERGED PRS ledger below the stats is deterministic ground truth too: its PR titles, authors, work types, file counts and changed-file paths are reliable. Use it to say concretely WHAT shipped and WHO shipped it — even for PRs not yet sorted into a bucket. Do not leave "What shipped" empty just because PRs are unclassified; summarize them from their titles and descriptions.
-- "Defect turnaround" figures are wall-clock time from a defect PR being opened to merged — describe them as time exposed to defect work, not engineer-hours.
-- Sections, in order: "## TL;DR" (3–5 bullets), "## What shipped", "## Buckets of work" (markdown table: Bucket | PRs | Features/Defects | Defect turnaround | Notes), "## Defect chasing", "## Hidden work" (features fully behind flags or not user-facing), "## Release operations"${tools.length ? ', "## Planned vs actual" (only if tool data came back)' : ''}, "## Watch-outs".
+- Use ONLY the numbers in the stats JSON for aggregate counts, hours and percentages — never invent them.
+- The MERGED PRS ledger below the stats is deterministic ground truth: titles, authors, work types, changed files, and — when a PR has been summarized — its per-PR "user impact" line and ★ highlight marker. Use it to say concretely what shipped, and cite PRs like #123.
+- Lead with VALUE, not mechanics. Write user-facing changes in plain product/customer language ("Users can now…"), never implementation jargon. Keep what users can see separate from internal/under-the-hood work.
+- Group related PRs into product areas/themes (e.g. Connectors, Blueprints, Integrations). Buckets in the stats are these themes when present; if PRs are unclassified, INFER the areas and the user impact from titles, descriptions and changed files. Never answer "unclassified" — that is a non-answer; do the grouping yourself.
+- Sections, in order:
+  - "## Headlines" — 3–6 bullets: the most notable things shipped, in product terms. Lead with new capabilities, new integrations, and any ★-highlighted PRs.
+  - "## New for users" — user-facing features & improvements as a release-notes changelog, grouped by area; lead each line with the user-visible change.
+  - "## New & expanded capabilities" — net-new product surface: integrations, connectors, new modes. Skip if none.
+  - "## Fixes & reliability" — defects and stability work users will feel. If defect-turnaround numbers exist, describe them as wall-clock exposure to defect work, not engineer-hours.
+  - "## Invisible this sprint" — real investment users can't see yet: work behind feature flags (name the flags) and internal/infra/refactor work. This is where release mechanics (develop→stage→main) belong, in one line.
+  - "## Where the effort went" — which product areas/themes saw the most work, by PR count and churn. Momentum, not vanity metrics.${tools.length ? '\n  - "## Planned vs actual" — only if tool data came back.' : ''}
+  - "## Watch-outs" — product risks: partially-shipped or flagged-off-but-incomplete work, high-risk changes, anything needing a product decision.
 - Skip a section gracefully ("Nothing notable.") rather than padding it.
 
 ${repoContextBlock(repo)}${buildToolInstructions(tools)}`;
@@ -220,7 +232,7 @@ ${repoContextBlock(repo)}${buildToolInstructions(tools)}`;
 STATS (computed deterministically — trust these):
 ${JSON.stringify(compactStats(stats))}
 
-MERGED PRS (deterministic — title, author, work type, churn and changed files per PR; grouped by bucket, with unclassified PRs listed explicitly):
+MERGED PRS (deterministic — title, author, work type, churn, changed files, and per-PR user impact + ★ highlights when summarized; grouped by area, with unclassified PRs listed explicitly):
 ${prLedger({ buckets, prs })}
 
 Write the report now.`;
@@ -278,10 +290,13 @@ function prLedgerLine(pr) {
   const flag = ann.behindFlag ? ` [flag${ann.flagName ? `:${ann.flagName}` : ''}]` : '';
   const comments = pr.comments?.length ? ` · ${pr.comments.length} comments` : '';
   const risk = ann.risk ? ` · ${ann.risk} risk` : '';
+  const facing = ann.workType ? (ann.userFacing ? ' · user-facing' : ' · internal') : '';
+  const star = ann.highlight ? '★ ' : '';
   const lines = [
-    `#${pr.number} "${truncate(pr.title, 120)}" — ${pr.author} · ${type}${flag}${risk}`,
+    `${star}#${pr.number} "${truncate(pr.title, 120)}" — ${pr.author} · ${type}${flag}${facing}${risk}`,
     `   ${pr.base || '?'} ← ${truncate(pr.head || '?', 50)} · merged ${pr.mergedAt ? isoDate(pr.mergedAt) : '?'} · +${pr.additions}/-${pr.deletions} in ${pr.changedFiles} files${comments}`,
   ];
+  if (ann.userImpact) lines.push(`   user impact: ${truncate(String(ann.userImpact).replace(/\s+/g, ' '), 200)}`);
 
   const paths = pr.files?.length
     ? pr.files.slice(0, 6).map((f) => (typeof f === 'string' ? f : f.path))
@@ -304,10 +319,14 @@ function prLedgerLine(pr) {
 function compactStats(stats) {
   return {
     totals: stats.totals,
+    highlights: (stats.highlights || []).slice(0, 12).map((h) => ({
+      pr: h.number, title: truncate(h.title, 90), area: h.bucket, impact: truncate(h.userImpact, 140),
+    })),
     perBucket: stats.perBucket.slice(0, 14).map((b) => ({
-      bucket: b.name,
+      area: b.name,
       prs: b.prCount,
       types: b.byType,
+      userFacing: b.userFacingCount,
       additions: b.additions,
       deletions: b.deletions,
       avgCycle: formatHours(b.avgCycleHours),

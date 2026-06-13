@@ -82,6 +82,20 @@ test('timeline covers the window and stacks by base branch', () => {
   assert.deepEqual(days.map((d) => d.date), ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05']);
 });
 
+test('product lens: user-facing count, shipped-to-users, and highlights', () => {
+  const stats = computeStats({ sprint, prs, buckets });
+  assert.equal(stats.totals.userFacing, 3); // PRs 1,2,3 are user-facing
+  assert.equal(stats.totals.shippedToUsers, 1); // only PR 1 is a user-facing feature
+  assert.deepEqual(stats.highlights, []); // none flagged in the base fixture
+
+  const withHighlight = [...prs, pr(6, { bucketId: 'b1', ann: { workType: 'feature', userFacing: true, highlight: true, userImpact: 'New thing for users' } })];
+  const s2 = computeStats({ sprint, prs: withHighlight, buckets });
+  assert.deepEqual(s2.highlights.map((h) => h.number), [6]);
+  assert.equal(s2.highlights[0].bucket, 'Checkout');
+  assert.equal(s2.highlights[0].userImpact, 'New thing for users');
+  assert.equal(s2.perBucket.find((b) => b.name === 'Checkout').userFacingCount, 4); // 1,2,3,6
+});
+
 test('empty sprint produces sane zeros', () => {
   const stats = computeStats({ sprint, prs: [], buckets: [] });
   assert.equal(stats.totals.prs, 0);

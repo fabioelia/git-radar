@@ -43,12 +43,16 @@ function annBlock(pr, bucket, m) {
 
   const current = a
     ? `<div class="ann-card">
-        <div class="ann-row"><span class="chip">${escapeHtml(a.workType || '?')}</span>
+        <div class="ann-row">
+          ${a.highlight ? '<span class="chip highlight" title="Notable / announce-worthy">★ highlight</span>' : ''}
+          <span class="chip">${escapeHtml(a.workType || '?')}</span>
+          <span class="chip">${a.userFacing ? 'user-facing' : 'internal'}</span>
           ${bucket ? `<span class="chip">${escapeHtml(bucket.name)}</span>` : '<span class="muted">no bucket</span>'}
           ${a.risk ? `<span class="chip risk-${a.risk}">${escapeHtml(a.risk)} risk</span>` : ''}
           ${a.behindFlag ? `<span class="chip flag">🚩${a.flagName ? ` ${escapeHtml(a.flagName)}` : ''}</span>` : ''}
         </div>
         ${a.summary ? `<p class="ann-summary">${escapeHtml(a.summary)}</p>` : ''}
+        ${a.userImpact ? `<p class="ann-impact"><strong>User impact:</strong> ${escapeHtml(a.userImpact)}</p>` : ''}
         ${a.detail ? `<p class="ann-detail">${escapeHtml(a.detail)}</p>` : ''}
       </div>`
     : '<p class="muted">Not summarized yet.</p>';

@@ -138,12 +138,16 @@ function prRow(p, buckets) {
   const stale = p.stale
     ? '<span class="chip stale" title="Summarized with an older prompt — a scan or “Summarize pending” will re-run it">↻ stale</span>'
     : '';
+  const highlight = p.ann?.highlight
+    ? `<span class="chip highlight" title="${escapeHtml(p.ann.userImpact || 'Notable / announce-worthy change')}">★</span>`
+    : '';
   return `
   <li class="pr-row">
     <a class="pr-num" href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer">#${p.number}</a>
     <div class="pr-main">
       <div class="pr-title" title="${escapeHtml(p.ann?.summary || p.title)}">${escapeHtml(p.title)}</div>
       <div class="pr-meta">
+        ${highlight}
         ${typeChip(p.ann?.workType)}
         ${p.ann?.behindFlag ? `<span class="chip flag">🚩${p.ann.flagName ? ` ${escapeHtml(p.ann.flagName)}` : ''}</span>` : ''}
         ${risk}

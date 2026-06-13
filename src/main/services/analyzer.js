@@ -362,6 +362,8 @@ export function applyClassifications(data, classifications) {
       userFacing: Boolean(c.user_facing),
       summary: String(c.summary || ''),
       detail: String(c.detail || ''),
+      userImpact: String(c.user_impact || ''),
+      highlight: Boolean(c.highlight),
       risk: ['low', 'medium', 'high'].includes(c.risk) ? c.risk : undefined,
       summaryFingerprint: c.summaryFingerprint,
       classifiedAt: new Date().toISOString(),
