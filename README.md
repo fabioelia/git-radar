@@ -35,8 +35,8 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
    **discussion** (issue comments, review verdicts and inline review comments — all pulled
    deterministically): bucket, work type (feature/defect/chore/infra/…), behind-flag + flag
    name, user-facing, a one-line summary, a 2–4 sentence **detail** (what changed, why, risk,
-   follow-ups), a release-notes-voice **user impact** line, a **highlight** flag for
-   announce-worthy changes, and a **risk** read. Buckets are *topics*, never types — a checkout bug fix
+   follow-ups), a release-notes-voice **user impact** line, **breaking** / **security**
+   flags, a **highlight** flag for announce-worthy changes, and a **risk** read. Buckets are *topics*, never types — a checkout bug fix
    lands in the **Checkout** bucket as a `defect`, so defect-chasing time aggregates per
    feature. Buckets get reorganized (merged/renamed) by a second LLM pass when they
    proliferate.
@@ -62,11 +62,14 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
    matters* — from deterministically computed stats (the LLM never does arithmetic) plus a
    deterministic ledger of every merged PR (title, author, work type, churn, changed files,
    and each PR's release-notes-voice **user impact** + ★ highlights when summarized). The
-   report is framed for a product owner: **Headlines**, **New for users** (release-notes
-   changelog), **New & expanded capabilities**, **Fixes & reliability**, **Invisible this
-   sprint** (flagged / internal work), **Where the effort went**, and **Watch-outs** — and
-   it's told to infer product areas and user impact from titles/files rather than ever
-   answering "unclassified". With MCP servers configured, it can call their tools first —
+   report is framed for a product owner: **Headlines**, **Breaking changes & security**
+   (surfaced up top, never buried), **New for users** (release-notes changelog), **New &
+   expanded capabilities**, **Fixes & reliability**, **Invisible this sprint** (flagged /
+   internal work), **Where the effort went**, and **Watch-outs** — written in user language,
+   specific (no "various fixes"), and told to infer product areas and user impact from
+   titles/files rather than ever answering "unclassified" or pasting raw PR titles. These
+   conventions follow Keep a Changelog, Conventional Commits and release-notes guidance
+   (see [docs/DESIGN.md](docs/DESIGN.md)). With MCP servers configured, it can call their tools first —
    e.g. fetch Jira sprint priorities — and add a *planned vs. actual* section.
 
 4. **Prompts tab** — full transparency into the local LLM: every exchange is logged

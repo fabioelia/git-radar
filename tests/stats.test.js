@@ -96,6 +96,20 @@ test('product lens: user-facing count, shipped-to-users, and highlights', () => 
   assert.equal(s2.perBucket.find((b) => b.name === 'Checkout').userFacingCount, 4); // 1,2,3,6
 });
 
+test('breaking changes and security fixes are surfaced deterministically', () => {
+  const items = [
+    pr(1, { bucketId: 'b1', ann: { workType: 'feature', userFacing: true, breaking: true, userImpact: 'API v1 removed' } }),
+    pr(2, { bucketId: 'b1', ann: { workType: 'defect', userFacing: true, security: true } }),
+    pr(3, { bucketId: 'b1', ann: { workType: 'chore', userFacing: false } }),
+  ];
+  const stats = computeStats({ sprint, prs: items, buckets });
+  assert.equal(stats.totals.breaking, 1);
+  assert.equal(stats.totals.security, 1);
+  assert.deepEqual(stats.breakingChanges.map((b) => b.number), [1]);
+  assert.equal(stats.breakingChanges[0].userImpact, 'API v1 removed');
+  assert.deepEqual(stats.securityFixes.map((s) => s.number), [2]);
+});
+
 test('empty sprint produces sane zeros', () => {
   const stats = computeStats({ sprint, prs: [], buckets: [] });
   assert.equal(stats.totals.prs, 0);

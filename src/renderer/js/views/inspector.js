@@ -45,6 +45,8 @@ function annBlock(pr, bucket, m) {
     ? `<div class="ann-card">
         <div class="ann-row">
           ${a.highlight ? '<span class="chip highlight" title="Notable / announce-worthy">★ highlight</span>' : ''}
+          ${a.breaking ? '<span class="chip breaking">⚠ breaking</span>' : ''}
+          ${a.security ? '<span class="chip security">🔒 security</span>' : ''}
           <span class="chip">${escapeHtml(a.workType || '?')}</span>
           <span class="chip">${a.userFacing ? 'user-facing' : 'internal'}</span>
           ${bucket ? `<span class="chip">${escapeHtml(bucket.name)}</span>` : '<span class="muted">no bucket</span>'}

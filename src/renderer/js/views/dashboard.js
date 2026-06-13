@@ -141,6 +141,8 @@ function prRow(p, buckets) {
   const highlight = p.ann?.highlight
     ? `<span class="chip highlight" title="${escapeHtml(p.ann.userImpact || 'Notable / announce-worthy change')}">★</span>`
     : '';
+  const breaking = p.ann?.breaking ? '<span class="chip breaking" title="Backward-incompatible change">⚠ breaking</span>' : '';
+  const security = p.ann?.security ? '<span class="chip security" title="Security fix / hardening">🔒 security</span>' : '';
   return `
   <li class="pr-row">
     <a class="pr-num" href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer">#${p.number}</a>
@@ -148,6 +150,8 @@ function prRow(p, buckets) {
       <div class="pr-title" title="${escapeHtml(p.ann?.summary || p.title)}">${escapeHtml(p.title)}</div>
       <div class="pr-meta">
         ${highlight}
+        ${breaking}
+        ${security}
         ${typeChip(p.ann?.workType)}
         ${p.ann?.behindFlag ? `<span class="chip flag">🚩${p.ann.flagName ? ` ${escapeHtml(p.ann.flagName)}` : ''}</span>` : ''}
         ${risk}

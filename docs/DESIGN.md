@@ -125,6 +125,36 @@ diff + discussion with no model call; `pr:summarize` fires it and applies the re
 the exchange lands in the Prompts tab like any other). This makes tuning the release-cycle
 prompt a tight per-merge feedback loop instead of a whole-sprint re-classify.
 
+### Report & summary conventions are research-backed
+The product-notes report and per-PR summaries encode established release-notes and
+changelog practice rather than ad-hoc prompt wording:
+
+- **Write for humans, in the reader's terms.** Entries describe user-visible value, not
+  implementation. Internal jargon, ticket IDs, codenames and file/symbol names are kept out
+  of user-facing lines. (Keep a Changelog — "changelogs are for humans, not machines";
+  Common Changelog; release-notes guidance.)
+- **Be specific; never vague.** No "various bug fixes", "misc" or "improved performance"
+  without the concrete what/scenario — these are the canonical anti-patterns. Raw PR/commit
+  titles are never pasted verbatim; they are rephrased into value. (Keep a Changelog bad
+  practices; Common Changelog rule "don't use `git log` output".)
+- **Never bury breaking changes, deprecations or security fixes.** Each PR carries
+  `breaking` and `security` flags; the report surfaces them in a dedicated section up top,
+  with the action a reader must take. (Semantic Versioning / Conventional Commits treat
+  breaking changes as first-class; Keep a Changelog makes Security a category.)
+- **Result-oriented user-impact voice.** The per-PR `user_impact` line is one concrete,
+  result-oriented sentence ("Users can now…", "Long messages are no longer truncated");
+  performance/reliability gains users feel count as user-facing. (Quiet release-notes guide.)
+- **Highlight against feature-blindness.** A selective `highlight` flag + a Headlines
+  section combat the well-documented tendency of readers to skip undifferentiated lists.
+- **Group for the audience.** Changelogs group by *type* (Added/Changed/Fixed/…); these are
+  *product notes*, so we group by product **area/theme** and separate user-facing from
+  internal/under-the-hood and developer/admin/API-facing work. This area-grouping is a
+  deliberate, context-dependent departure from the type-grouping convention.
+
+Sources: Keep a Changelog (keepachangelog.com), Common Changelog (common-changelog.org),
+Conventional Commits (conventionalcommits.org), Semantic Versioning (semver.org), GitHub PR
+best practices, and practitioner release-notes guides.
+
 ### Sprints are explicit windows
 Each repo has a cycle length (default 3 weeks). A sprint is a stored {start, end}
 window; "New sprint" rolls over from the previous end date. Buckets live per sprint —

@@ -363,6 +363,8 @@ export function applyClassifications(data, classifications) {
       summary: String(c.summary || ''),
       detail: String(c.detail || ''),
       userImpact: String(c.user_impact || ''),
+      breaking: Boolean(c.breaking),
+      security: Boolean(c.security),
       highlight: Boolean(c.highlight),
       risk: ['low', 'medium', 'high'].includes(c.risk) ? c.risk : undefined,
       summaryFingerprint: c.summaryFingerprint,

@@ -106,29 +106,34 @@ test('summaryFingerprint tracks the release-cycle prompt; isSummaryStale follows
   assert.equal(isSummaryStale(done, repoB), true); // prompt changed → stale
 });
 
-test('PR_SUMMARY_SCHEMA requires the planning + product fields', () => {
+test('PR_SUMMARY_SCHEMA requires the planning + product fields and has breaking/security flags', () => {
   assert.deepEqual(
     PR_SUMMARY_SCHEMA.required.sort(),
     ['behind_flag', 'bucket', 'detail', 'summary', 'user_facing', 'user_impact', 'work_type'],
   );
   assert.deepEqual(PR_SUMMARY_SCHEMA.properties.risk.enum, ['low', 'medium', 'high']);
   assert.equal(PR_SUMMARY_SCHEMA.properties.highlight.type, 'boolean');
+  assert.equal(PR_SUMMARY_SCHEMA.properties.breaking.type, 'boolean');
+  assert.equal(PR_SUMMARY_SCHEMA.properties.security.type, 'boolean');
 });
 
-test('buildSummarizeMessages asks for a release-notes user-impact line and a highlight flag', () => {
+test('buildSummarizeMessages asks for specific user impact, breaking/security flags and a highlight', () => {
   const system = buildSummarizeMessages({ repo: { owner: 'a', name: 'b' }, buckets: [], pr: pr(1, { comments: [] }) })[0].content;
   assert.match(system, /user_impact: if user_facing/);
-  assert.match(system, /release-notes/);
+  assert.match(system, /release-notes voice/);
+  assert.match(system, /never vague filler like "various fixes"/);
+  assert.match(system, /breaking: true if this is backward-incompatible/);
+  assert.match(system, /security: true if it fixes a vulnerability/);
   assert.match(system, /highlight: true only for a genuinely notable/);
 });
 
-test('prLedger surfaces detail, comments, highlight star, user-facing tag and user impact', () => {
+test('prLedger surfaces detail, comments, markers (breaking/security/highlight), user-facing tag and impact', () => {
   const prs = [pr(9, {
     comments: [{}, {}, {}],
-    ann: { workType: 'feature', userFacing: true, highlight: true, userImpact: 'Users can now export blueprints as raw JSON.', detail: 'Big rework of the cart.', risk: 'high' },
+    ann: { workType: 'feature', userFacing: true, breaking: true, security: true, highlight: true, userImpact: 'Users can now export blueprints as raw JSON.', detail: 'Big rework of the cart.', risk: 'high' },
   })];
   const out = prLedger({ buckets: [], prs });
-  assert.match(out, /★ #9 "PR 9"/);
+  assert.match(out, /⚠ breaking 🔒 security ★ #9 "PR 9"/);
   assert.match(out, /· user-facing/);
   assert.match(out, /3 comments/);
   assert.match(out, /high risk/);
@@ -143,9 +148,13 @@ test('buildReportMessages frames the report as product notes and forbids the "un
   const system = messages.find((m) => m.role === 'system').content;
   assert.match(system, /product notes/i);
   assert.match(system, /## Headlines/);
+  assert.match(system, /## Breaking changes & security/);
   assert.match(system, /## New for users/);
   assert.match(system, /## Invisible this sprint/);
   assert.match(system, /Never answer "unclassified"/);
+  assert.match(system, /various bug fixes/); // bans vague filler
+  assert.match(system, /Do NOT paste raw PR titles/);
+  assert.match(system, /must NEVER be buried/);
 });
 
 test('buildReportMessages embeds the deterministic ledger in the user turn', () => {

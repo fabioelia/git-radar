@@ -11,7 +11,7 @@ export const WORK_TYPES = ['feature', 'defect', 'chore', 'infra', 'docs', 'test'
 // prompt, this is each summary's "fingerprint": a PR is re-summarized only when
 // its fingerprint no longer matches the current one (we changed the template,
 // or you edited the release-cycle prompt) — never just because a scan ran again.
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
 function djb2(s) {
   let h = 5381;
@@ -43,6 +43,8 @@ export const PR_SUMMARY_SCHEMA = {
     summary: { type: 'string' },
     detail: { type: 'string' },
     user_impact: { type: 'string' },
+    breaking: { type: 'boolean' },
+    security: { type: 'boolean' },
     highlight: { type: 'boolean' },
     risk: { type: 'string', enum: ['low', 'medium', 'high'] },
   },
@@ -136,8 +138,10 @@ Fields:
 - user_facing: true only if end users can see or feel the change once released (false for internal tooling, refactors, flagged-off work).
 - summary: ONE plain-language sentence on what the PR did.
 - detail: 2–4 sentences for the team lead — what changed, why, and any risk or follow-up that is evident from the description, the changed files and the PR discussion. Ground every claim in the data provided; do not invent.
-- user_impact: if user_facing, ONE sentence in release-notes / changelog voice describing what the END USER can now do or see ("Users can now select a sheet when importing a data dictionary."). Write it for a product audience, not in implementation terms. If the change is internal, infra, a refactor, or flagged off, return "" (empty string).
-- highlight: true only for a genuinely notable, announce-worthy change — a new capability, a new integration/connector, or a fix to something users clearly felt. Most PRs are NOT highlights; be selective.
+- user_impact: if user_facing, ONE specific, result-oriented sentence in release-notes voice describing what the END USER can now do, see, or no longer suffer ("Users can now select a sheet when importing a data dictionary"; "Long messages are no longer truncated"). Name the concrete capability or scenario — never vague filler like "various fixes" or "improved performance" with no specifics. Write for a product audience: NO internal ticket IDs/codenames, file or symbol names, or implementation jargon. A performance or reliability gain users actually feel IS user-facing. If the change is internal, infra, a pure refactor, or flagged off, return "" (empty string).
+- breaking: true if this is backward-incompatible — a removed/renamed public API, changed default or output, required migration or config change, or anything labelled "breaking" / "BREAKING CHANGE". Breaking changes must never be buried, so err toward flagging when in doubt.
+- security: true if it fixes a vulnerability or hardens against one (auth, injection, secrets, dependency CVE, access control). Do not invent exploit details.
+- highlight: true only for a genuinely notable, announce-worthy change — a major new capability, a new integration/connector, a breaking change, a security fix, or a fix to something many users clearly hit. Most PRs are NOT highlights; be selective.
 - risk: low | medium | high — your read of release risk given the size, area touched and discussion.
 
 Respond with JSON matching the provided schema.`;
@@ -212,11 +216,14 @@ export function buildReportMessages({ repo, sprint, stats, buckets, prs, tools }
 
 Rules:
 - Use ONLY the numbers in the stats JSON for aggregate counts, hours and percentages — never invent them.
-- The MERGED PRS ledger below the stats is deterministic ground truth: titles, authors, work types, changed files, and — when a PR has been summarized — its per-PR "user impact" line and ★ highlight marker. Use it to say concretely what shipped, and cite PRs like #123.
-- Lead with VALUE, not mechanics. Write user-facing changes in plain product/customer language ("Users can now…"), never implementation jargon. Keep what users can see separate from internal/under-the-hood work.
+- The MERGED PRS ledger below the stats is deterministic ground truth: titles, authors, work types, changed files, and — when a PR has been summarized — its per-PR "user impact" line, ⚠ breaking and 🔒 security markers, and ★ highlight marker. Use it to say concretely what shipped, and cite PRs like #123.
+- Lead with VALUE, not mechanics. Write user-facing changes in plain product/customer language ("Users can now…"), never implementation jargon, internal ticket IDs or codenames. Keep what users can see separate from internal/under-the-hood work; call out changes aimed at developers/admins/integrators (APIs, config) as such.
+- Be specific. NEVER write filler like "various bug fixes", "misc improvements" or "improved performance" with no specifics — name the concrete change or scenario. Do NOT paste raw PR titles as entries; rephrase each into the reader-facing value.
 - Group related PRs into product areas/themes (e.g. Connectors, Blueprints, Integrations). Buckets in the stats are these themes when present; if PRs are unclassified, INFER the areas and the user impact from titles, descriptions and changed files. Never answer "unclassified" — that is a non-answer; do the grouping yourself.
+- Breaking changes, deprecations and security fixes must NEVER be buried — surface them up top even if there are only one or two. (For security, describe that something was hardened/fixed; do not publish exploit details.)
 - Sections, in order:
   - "## Headlines" — 3–6 bullets: the most notable things shipped, in product terms. Lead with new capabilities, new integrations, and any ★-highlighted PRs.
+  - "## Breaking changes & security" — backward-incompatible changes (with the migration/action a reader must take) and security fixes. Omit the whole section only if there are genuinely none.
   - "## New for users" — user-facing features & improvements as a release-notes changelog, grouped by area; lead each line with the user-visible change.
   - "## New & expanded capabilities" — net-new product surface: integrations, connectors, new modes. Skip if none.
   - "## Fixes & reliability" — defects and stability work users will feel. If defect-turnaround numbers exist, describe them as wall-clock exposure to defect work, not engineer-hours.
@@ -232,7 +239,7 @@ ${repoContextBlock(repo)}${buildToolInstructions(tools)}`;
 STATS (computed deterministically — trust these):
 ${JSON.stringify(compactStats(stats))}
 
-MERGED PRS (deterministic — title, author, work type, churn, changed files, and per-PR user impact + ★ highlights when summarized; grouped by area, with unclassified PRs listed explicitly):
+MERGED PRS (deterministic — title, author, work type, churn, changed files, and per-PR user impact + ⚠ breaking / 🔒 security / ★ highlight markers when summarized; grouped by area, with unclassified PRs listed explicitly):
 ${prLedger({ buckets, prs })}
 
 Write the report now.`;
@@ -291,9 +298,9 @@ function prLedgerLine(pr) {
   const comments = pr.comments?.length ? ` · ${pr.comments.length} comments` : '';
   const risk = ann.risk ? ` · ${ann.risk} risk` : '';
   const facing = ann.workType ? (ann.userFacing ? ' · user-facing' : ' · internal') : '';
-  const star = ann.highlight ? '★ ' : '';
+  const markers = `${ann.breaking ? '⚠ breaking ' : ''}${ann.security ? '🔒 security ' : ''}${ann.highlight ? '★ ' : ''}`;
   const lines = [
-    `${star}#${pr.number} "${truncate(pr.title, 120)}" — ${pr.author} · ${type}${flag}${facing}${risk}`,
+    `${markers}#${pr.number} "${truncate(pr.title, 120)}" — ${pr.author} · ${type}${flag}${facing}${risk}`,
     `   ${pr.base || '?'} ← ${truncate(pr.head || '?', 50)} · merged ${pr.mergedAt ? isoDate(pr.mergedAt) : '?'} · +${pr.additions}/-${pr.deletions} in ${pr.changedFiles} files${comments}`,
   ];
   if (ann.userImpact) lines.push(`   user impact: ${truncate(String(ann.userImpact).replace(/\s+/g, ' '), 200)}`);
@@ -321,6 +328,12 @@ function compactStats(stats) {
     totals: stats.totals,
     highlights: (stats.highlights || []).slice(0, 12).map((h) => ({
       pr: h.number, title: truncate(h.title, 90), area: h.bucket, impact: truncate(h.userImpact, 140),
+    })),
+    breakingChanges: (stats.breakingChanges || []).slice(0, 20).map((h) => ({
+      pr: h.number, title: truncate(h.title, 90), area: h.bucket, impact: truncate(h.userImpact, 140),
+    })),
+    securityFixes: (stats.securityFixes || []).slice(0, 20).map((h) => ({
+      pr: h.number, title: truncate(h.title, 90), area: h.bucket,
     })),
     perBucket: stats.perBucket.slice(0, 14).map((b) => ({
       area: b.name,

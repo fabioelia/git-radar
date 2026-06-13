@@ -548,6 +548,8 @@ label .input, label .select { color: var(--text); font-weight: 400; }
 
 .chip.stale { color: var(--yellow); border-color: rgba(255, 209, 102, 0.35); }
 .chip.highlight { color: var(--accent); border-color: rgba(77, 163, 255, 0.45); }
+.chip.breaking { color: var(--red); border-color: rgba(255, 107, 107, 0.45); }
+.chip.security { color: var(--yellow); border-color: rgba(255, 209, 102, 0.45); }
 .ann-impact { margin: 6px 0 0; font-size: 13px; }
 .chip.risk-low { color: var(--green); border-color: rgba(61, 220, 151, 0.3); }
 .chip.risk-medium { color: var(--yellow); border-color: rgba(255, 209, 102, 0.35); }

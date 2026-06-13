@@ -18,18 +18,22 @@ export function computeStats({ sprint, prs, buckets }) {
     // Product lens: what users can see, and net-new user-facing capability.
     userFacing: merged.filter((p) => p.ann?.userFacing).length,
     shippedToUsers: merged.filter((p) => p.ann?.userFacing && p.ann?.workType === 'feature').length,
+    breaking: merged.filter((p) => p.ann?.breaking).length,
+    security: merged.filter((p) => p.ann?.security).length,
   };
 
+  const flagPr = (p) => ({
+    number: p.number,
+    title: p.title,
+    bucket: buckets.find((b) => b.id === p.bucketId)?.name || null,
+    workType: p.ann?.workType || null,
+    userImpact: p.ann?.userImpact || '',
+  });
   // Announce-worthy changes the analyst should lead with.
-  const highlights = merged
-    .filter((p) => p.ann?.highlight)
-    .map((p) => ({
-      number: p.number,
-      title: p.title,
-      bucket: buckets.find((b) => b.id === p.bucketId)?.name || null,
-      workType: p.ann?.workType || null,
-      userImpact: p.ann?.userImpact || '',
-    }));
+  const highlights = merged.filter((p) => p.ann?.highlight).map(flagPr);
+  // Must-never-bury changes — surfaced deterministically so the report can't miss them.
+  const breakingChanges = merged.filter((p) => p.ann?.breaking).map(flagPr);
+  const securityFixes = merged.filter((p) => p.ann?.security).map(flagPr);
 
   const perBucket = buckets
     .map((b) => bucketStats(b, merged.filter((p) => p.bucketId === b.id)))
@@ -45,6 +49,8 @@ export function computeStats({ sprint, prs, buckets }) {
   return {
     totals,
     highlights,
+    breakingChanges,
+    securityFixes,
     perBucket,
     defectChasing,
     hiddenWork,
