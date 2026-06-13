@@ -1,0 +1,4 @@
+# pnpm skips dependency lifecycle scripts unless approved; electron's
+# postinstall downloads its platform binary, so it must be allowed to run.
+allowBuilds:
+  electron: true

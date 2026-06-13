@@ -47,15 +47,19 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
 | Tool | Why | Setup |
 |---|---|---|
 | Node.js ≥ 20.11 | run the app | nodejs.org |
+| pnpm | package manager | `corepack enable` (bundled with Node) |
 | GitHub CLI | fetch merged PRs (your existing auth, incl. SSO/Enterprise) | `brew install gh && gh auth login` |
 | Ollama + Gemma | local analysis | [ollama.com](https://ollama.com), then `ollama pull gemma3:12b` (or `gemma3:4b` on lighter machines) |
 
 ## Run it
 
 ```bash
-npm install
-npm start
+pnpm install
+pnpm start
 ```
+
+(`pnpm-workspace.yaml` pre-approves electron's postinstall — pnpm skips dependency
+build scripts by default, and electron needs its script to download the platform binary.)
 
 Then: **＋ Add repository** → enter `owner/repo`, the release-cycle prompt, cycle length,
 and (optionally) tracked base branches like `develop, stage, main` → **📡 Scan**.
@@ -95,7 +99,7 @@ the planned-vs-actual section.
 ## Development
 
 ```bash
-npm test          # node --test: stats engine, store, analyzer pipeline (stubbed LLM/gh/MCP), parsers
+pnpm test         # node --test: stats engine, store, analyzer pipeline (stubbed LLM/gh/MCP), parsers
 ```
 
 - `src/main/services/` — testable, dependency-injected services (no electron imports)

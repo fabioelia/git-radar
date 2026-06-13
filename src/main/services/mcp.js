@@ -14,7 +14,7 @@ async function sdk() {
     ]);
     return { Client, StdioClientTransport };
   } catch (e) {
-    throw new Error(`MCP SDK unavailable (${e.message}). Run \`npm install\` in the app directory.`);
+    throw new Error(`MCP SDK unavailable (${e.message}). Run \`pnpm install\` in the app directory.`);
   }
 }
 
