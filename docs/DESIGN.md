@@ -52,10 +52,15 @@ a narrative + numbers a team lead can read in two minutes at sprint review.
 1. **Sync** — fetch PRs merged inside the sprint window (optionally filtered to the
    tracked base branches: develop/stage/main). Re-sync merges by PR number and never
    loses prior classification.
-2. **Categorize** — batches of ~10 PRs go to Gemma with the repo's context prompt and
-   the *current* bucket list. The model assigns each PR to an existing bucket or coins
-   a new one, plus per-PR annotations: `work_type` (feature/defect/chore/infra/docs/
-   test/refactor/release), `behind_flag` + flag name, `user_facing`, one-line summary.
+2. **Categorize** — one PR at a time, Gemma gets the repo's context prompt, the *current*
+   bucket list, and the PR's full material: title/body, the **changed-file list**, and the
+   **discussion** (issue comments + review verdicts + inline review comments, pulled
+   deterministically via `gh` and cached on the PR). The model assigns each PR to an
+   existing bucket or coins a new one, plus annotations: `work_type` (feature/defect/chore/
+   infra/docs/test/refactor/release), `behind_flag` + flag name, `user_facing`, a one-line
+   `summary`, a 2–4 sentence `detail` for sprint planning, and a `risk` read. Per-PR (not
+   batched) keeps each summary deep and individually inspectable/re-runnable; it stays cheap
+   in steady state because the auto-poll only feeds newly-merged PRs.
 3. **Reorganize** — buckets drift as the sprint progresses. A second LLM pass proposes
    `merge` / `rename` / `update_description` operations to keep 5–12 coherent buckets.
    Runs automatically when buckets proliferate, or on demand.
@@ -104,6 +109,22 @@ model to reply with `{"tool_call": {name, arguments}}` JSON when it wants data. 
 parse, call the MCP server, feed the result back, loop (≤5 calls). This works with
 *any* model and degrades gracefully: no MCP servers → the section is skipped.
 
+### Polling, not webhooks (local-first has no endpoint)
+Real GitHub push webhooks need a public HTTP endpoint to receive events — a local
+desktop app has none, and hosting one would break the "nothing leaves your machine"
+promise. So "check for updates" is an opt-in background **poller** (`services/poller.js`)
+that runs the normal scan (`gh` sync + per-PR summarize) on the sprint whose window
+contains today. It shares the same single-task lock as the manual buttons (so a poll and
+a click never collide), is reentrancy-guarded, and `unref()`s its timer so it never keeps
+the process alive. When a poll picks up changes it nudges the renderer to refresh.
+
+### Per-PR summaries are inspectable and re-runnable
+Because each PR is summarized in its own LLM call, the exact prompt for any one PR can be
+shown, copied, and re-fired on demand from the inspector (`pr:inspect` builds the prompt +
+diff + discussion with no model call; `pr:summarize` fires it and applies the result, and
+the exchange lands in the Prompts tab like any other). This makes tuning the release-cycle
+prompt a tight per-merge feedback loop instead of a whole-sprint re-classify.
+
 ### Sprints are explicit windows
 Each repo has a cycle length (default 3 weeks). A sprint is a stored {start, end}
 window; "New sprint" rolls over from the previous end date. Buckets live per sprint —
@@ -144,9 +165,9 @@ mcp, emit})`) so the whole pipeline is testable with stubs — no Electron, no n
 
 ## Cut from v1 (deliberately)
 
-- Auto-sync scheduling (manual "Scan" keeps runs predictable and cheap on a local LLM)
 - Engineer-hour estimation beyond PR turnaround time (would be fiction)
-- Review/comment ingestion (valuable later for "review latency" stats)
+- Review-latency / review-throughput stats (we now ingest PR comments + reviews as
+  summarizer context, but don't yet compute review-cycle metrics from them)
 - Cross-repo rollups (per-repo radar first; the store supports it later)
 - Git Radar acting as an MCP *server* (exposing sprint stats to other agents) — the
   natural next step once the data model settles.

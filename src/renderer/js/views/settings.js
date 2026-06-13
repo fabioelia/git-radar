@@ -102,6 +102,22 @@ export function renderSettings(state) {
     <p class="hint">All GitHub access goes through <code>gh</code> — Git Radar never stores tokens.</p>
   </section>
 
+  <section class="card">
+    <h2 class="card-title">Auto-poll <span class="muted">background merge checks</span></h2>
+    <p class="hint">Git Radar is local-first with no public endpoint, so it can't receive GitHub webhooks.
+    Instead it polls <code>gh</code> on an interval and runs a scan (sync + per-PR summary) on the sprint
+    that's currently live — so new merges are already summarized when you sit down to plan.</p>
+    <div class="form-grid">
+      <label class="check">
+        <input type="checkbox" id="set-autopoll" ${s.autoPoll ? 'checked' : ''} />
+        Check for new merges automatically
+      </label>
+      <label>Interval (minutes)
+        <input class="input" id="set-autopoll-mins" type="number" min="1" step="1" value="${Number(s.autoPollMinutes) || 15}" />
+      </label>
+    </div>
+  </section>
+
   <div class="form-actions sticky-save">
     <button class="btn primary" data-action="settings-save">Save settings</button>
     ${state.appInfo ? `<span class="muted">data: ${escapeHtml(state.appInfo.dataDir || '')} · electron ${escapeHtml(state.appInfo.electron || '')}</span>` : ''}

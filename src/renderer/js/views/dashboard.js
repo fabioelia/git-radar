@@ -43,8 +43,14 @@ function bucketsSection(state) {
       'Hit <strong>📡 Scan</strong> to pull the PRs merged during this sprint window and let the local LLM organize them into buckets of work.');
   }
   if (!d.buckets.length) {
-    return emptyCard(`${d.prs.length} merged PRs, not classified yet`,
-      'Hit <strong>📡 Scan</strong> (or “Re-classify everything”) to organize them into buckets with the local LLM.');
+    const loose = [...d.prs].sort((a, b) => String(b.mergedAt).localeCompare(String(a.mergedAt)));
+    return `
+    <section class="card">
+      <h2 class="card-title">${d.prs.length} merged PRs <span class="muted">not summarized yet</span></h2>
+      <p class="hint">Hit <strong>📡 Scan</strong> (or “Re-classify everything”) to summarize them into buckets with the local LLM —
+      or 🔍 inspect any PR to see its diff and discussion, view the generated prompt, and run the summary on just that one.</p>
+      <ul class="pr-list">${loose.map((p) => prRow(p, d.buckets)).join('')}</ul>
+    </section>`;
   }
   const cards = d.stats.perBucket.map((b) => bucketCard(b, state)).join('');
   return `
@@ -96,6 +102,12 @@ function prRow(p, buckets) {
     `<option value="" ${!p.bucketId ? 'selected' : ''}>(no bucket)</option>`,
     ...buckets.map((b) => `<option value="${b.id}" ${b.id === p.bucketId ? 'selected' : ''}>${escapeHtml(b.name)}</option>`),
   ].join('');
+  const risk = p.ann?.risk
+    ? `<span class="chip risk-${p.ann.risk}" title="LLM risk read">${escapeHtml(p.ann.risk)} risk</span>`
+    : '';
+  const comments = p.comments?.length
+    ? `<span title="comments + reviews on the PR">💬 ${p.comments.length}</span>`
+    : '';
   return `
   <li class="pr-row">
     <a class="pr-num" href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer">#${p.number}</a>
@@ -104,13 +116,19 @@ function prRow(p, buckets) {
       <div class="pr-meta">
         ${typeChip(p.ann?.workType)}
         ${p.ann?.behindFlag ? `<span class="chip flag">🚩${p.ann.flagName ? ` ${escapeHtml(p.ann.flagName)}` : ''}</span>` : ''}
+        ${risk}
         <span>${escapeHtml(p.author)}</span>
         <span>→ ${escapeHtml(p.base)}</span>
         <span title="open → merge">${formatHours(cycle)}</span>
         <span class="muted">+${p.additions}/−${p.deletions}</span>
+        ${comments}
       </div>
+      ${p.ann?.detail ? `<p class="pr-detail">${escapeHtml(p.ann.detail)}</p>` : ''}
     </div>
-    <select class="select pr-move" data-change="move-pr" data-pr="${p.number}" title="Move to another bucket">${options}</select>
+    <div class="pr-actions">
+      <button class="icon-btn" title="Inspect PR: diff, discussion, the generated prompt, and re-run the summary" data-action="inspect-pr" data-pr="${p.number}">🔍</button>
+      <select class="select pr-move" data-change="move-pr" data-pr="${p.number}" title="Move to another bucket">${options}</select>
+    </div>
   </li>`;
 }
 

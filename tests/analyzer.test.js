@@ -60,47 +60,90 @@ test('sync merges fetched PRs by number and preserves annotations', async () => 
   assert.ok(saved.lastSyncAt);
 });
 
-test('categorize batches PRs through the LLM and builds buckets', async () => {
+test('categorize summarizes each PR (per-PR), fetches discussion, and builds buckets', async () => {
   const store = memStore({ repo, sprint, data: { prs: [pr(1), pr(2), pr(3)], buckets: [], reports: [] } });
-  const seenBatches = [];
-  const ollama = {
-    chat: async ({ messages, schema }) => {
-      assert.ok(schema, 'classification must use structured outputs');
-      const userMsg = messages.find((m) => m.role === 'user').content;
-      seenBatches.push(userMsg);
-      return JSON.stringify({
-        classifications: [
-          { number: 1, bucket: 'Checkout', bucket_description: 'checkout work', work_type: 'feature', behind_flag: true, flag_name: 'new-co', user_facing: true, summary: 's1' },
-          { number: 2, bucket: 'checkout', work_type: 'defect', behind_flag: false, flag_name: '', user_facing: true, summary: 's2' },
-          { number: 3, bucket: 'Release Operations', work_type: 'release', behind_flag: false, flag_name: '', user_facing: false, summary: 's3' },
-        ],
-      });
+  const seenPrompts = [];
+  const detailCalls = [];
+  const github = {
+    fetchPRDetails: async (_repo, number) => {
+      detailCalls.push(number);
+      return { comments: [{ kind: 'comment', author: 'rev', body: `discuss ${number}`, createdAt: '2026-06-01T00:00:00Z' }] };
     },
   };
-  const analyzer = createAnalyzer({ store, ollama, github: {}, mcp: {} });
+  const ollama = {
+    chat: async ({ messages, schema }) => {
+      assert.ok(schema, 'summarize must use structured outputs');
+      const userMsg = messages.find((m) => m.role === 'user').content;
+      seenPrompts.push(userMsg);
+      const num = Number(userMsg.match(/#(\d+) "/)[1]);
+      if (num === 1) return JSON.stringify({ bucket: 'Checkout', bucket_description: 'checkout work', work_type: 'feature', behind_flag: true, flag_name: 'new-co', user_facing: true, summary: 's1', detail: 'Rebuilt the cart summary.', risk: 'medium' });
+      if (num === 2) return JSON.stringify({ bucket: 'checkout', work_type: 'defect', behind_flag: false, flag_name: '', user_facing: true, summary: 's2', detail: 'Fixed a promo NPE.' });
+      return JSON.stringify({ bucket: 'Release Operations', work_type: 'release', behind_flag: false, flag_name: '', user_facing: false, summary: 's3', detail: 'Merged develop into stage.' });
+    },
+  };
+  const analyzer = createAnalyzer({ store, ollama, github, mcp: {} });
   const result = await analyzer.categorize('s1');
   assert.equal(result.classified, 3);
+  assert.equal(seenPrompts.length, 3); // one LLM call per PR
+  assert.deepEqual(detailCalls.sort(), [1, 2, 3]); // discussion pulled deterministically per PR
+  assert.match(seenPrompts[0], /ANALYZE THIS PR/);
+  assert.match(seenPrompts[0], /PR DISCUSSION/);
+  assert.match(seenPrompts[0], /discuss 1/); // the fetched comment is in the prompt
+
   const data = store.peek();
   assert.equal(data.buckets.length, 2); // "checkout" matched "Checkout" case-insensitively
   const checkout = data.buckets.find((b) => b.name === 'Checkout');
   assert.equal(checkout.description, 'checkout work');
   assert.equal(data.prs.filter((p) => p.bucketId === checkout.id).length, 2);
-  assert.equal(data.prs.find((p) => p.number === 1).ann.behindFlag, true);
+  const one = data.prs.find((p) => p.number === 1);
+  assert.equal(one.ann.behindFlag, true);
+  assert.equal(one.ann.detail, 'Rebuilt the cart summary.');
+  assert.equal(one.ann.risk, 'medium');
+  assert.equal(one.comments.length, 1); // discussion cached on the PR
 
-  // second run with nothing new is a no-op (no LLM calls)
-  const calls = seenBatches.length;
+  // second run with nothing new is a no-op (no LLM calls, no re-fetch)
+  const llmCalls = seenPrompts.length;
+  const fetches = detailCalls.length;
   const again = await analyzer.categorize('s1');
   assert.equal(again.classified, 0);
-  assert.equal(seenBatches.length, calls);
+  assert.equal(seenPrompts.length, llmCalls);
+  assert.equal(detailCalls.length, fetches);
 
-  // the exchange is logged verbatim for the Prompts tab
+  // each PR's exchange is logged verbatim for the Prompts tab (newest first)
   const log = data.llmLog;
-  assert.equal(log.length, 1);
-  assert.equal(log[0].task, 'classify');
+  assert.equal(log.length, 3);
+  assert.ok(log.every((e) => e.task === 'summarize'));
   assert.equal(log[0].messages[0].role, 'system');
-  assert.match(log[0].messages[1].content, /Classify these 3 merged PRs/);
-  assert.match(log[0].response, /classifications/);
   assert.ok(Number.isFinite(log[0].durationMs));
+});
+
+test('summarizePR re-runs one PR on demand and inspectPR builds the prompt without firing', async () => {
+  const store = memStore({ repo, sprint, data: { prs: [pr(7)], buckets: [], reports: [] } });
+  let chatCalls = 0;
+  const github = {
+    fetchPRDetails: async () => ({ comments: [{ kind: 'review', state: 'approved', author: 'lead', body: 'LGTM', createdAt: '2026-06-01T00:00:00Z' }] }),
+    fetchPRDiff: async () => ({ diff: 'diff --git a/x b/x\n+hi', truncated: false, totalChars: 24 }),
+  };
+  const ollama = {
+    chat: async () => { chatCalls += 1; return JSON.stringify({ bucket: 'Growth', work_type: 'feature', behind_flag: false, user_facing: true, summary: 'did a thing', detail: 'A thing happened.', risk: 'low' }); },
+  };
+  const analyzer = createAnalyzer({ store, ollama, github, mcp: {} });
+
+  // inspectPR fires no LLM call, returns the built prompt + diff + discussion
+  const inspect = await analyzer.inspectPR('s1', 7);
+  assert.equal(chatCalls, 0);
+  assert.equal(inspect.messages[0].role, 'system');
+  assert.match(inspect.messages[1].content, /ANALYZE THIS PR/);
+  assert.match(inspect.messages[1].content, /LGTM/);
+  assert.equal(inspect.diff.totalChars, 24);
+
+  // summarizePR fires once and applies the result
+  const res = await analyzer.summarizePR('s1', 7);
+  assert.equal(chatCalls, 1);
+  assert.equal(res.pr.ann.workType, 'feature');
+  assert.equal(res.pr.ann.detail, 'A thing happened.');
+  assert.equal(store.peek().prs[0].bucketId, store.peek().buckets.find((b) => b.name === 'Growth').id);
+  assert.equal(store.peek().llmLog[0].task, 'summarize');
 });
 
 test('failed LLM calls are logged with the prompt and persisted', async () => {

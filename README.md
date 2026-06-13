@@ -30,12 +30,22 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
    > `develop`; at code freeze we start merging into `stage`; we release by merging
    > `stage` into `main`. Feature work is usually gated behind LaunchDarkly flags.
 
-2. **📡 Scan** — pulls PRs merged in the sprint window via `gh`, then classifies new
-   ones in batches with Gemma: bucket, work type (feature/defect/chore/infra/…),
-   behind-flag + flag name, user-facing, one-line summary. Buckets are *topics*, never
-   types — a checkout bug fix lands in the **Checkout** bucket as a `defect`, so
-   defect-chasing time aggregates per feature. Buckets get reorganized (merged/renamed)
-   by a second LLM pass when they proliferate.
+2. **📡 Scan** — pulls PRs merged in the sprint window via `gh`, then summarizes each new
+   one with Gemma in a single per-PR pass over its description, **changed-file list** and
+   **discussion** (issue comments, review verdicts and inline review comments — all pulled
+   deterministically): bucket, work type (feature/defect/chore/infra/…), behind-flag + flag
+   name, user-facing, a one-line summary, a 2–4 sentence **detail** (what changed, why, risk,
+   follow-ups) and a **risk** read. Buckets are *topics*, never types — a checkout bug fix
+   lands in the **Checkout** bucket as a `defect`, so defect-chasing time aggregates per
+   feature. Buckets get reorganized (merged/renamed) by a second LLM pass when they
+   proliferate.
+
+   - **🔍 Inspect a PR** — open any PR to see its diff, its discussion, the *exact* prompt
+     Git Radar generates for it, and a button to re-fire the summarizer and watch how it
+     behaves — handy for tuning the release-cycle prompt per merge.
+   - **Auto-poll** (Settings) — since a local-first app can't receive GitHub webhooks, Git
+     Radar can instead poll `gh` on an interval and summarize new merges into the live
+     sprint automatically, so each PR is ready with detail before planning.
 
 3. **📝 Report** — Gemma writes the sprint report from deterministically computed stats
    (the LLM never does arithmetic) plus a deterministic ledger of every merged PR —

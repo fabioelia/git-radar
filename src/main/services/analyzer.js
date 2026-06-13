@@ -3,17 +3,16 @@
 // whole thing runs under tests with stubs.
 
 import {
-  buildClassifyMessages,
+  buildSummarizeMessages,
   buildReorgMessages,
   buildReportMessages,
-  CLASSIFY_SCHEMA,
+  PR_SUMMARY_SCHEMA,
   REORG_SCHEMA,
   WORK_TYPES,
 } from './prompts.js';
 import { computeStats } from './stats.js';
 import { extractJson, extractToolCall, uid, truncate } from './util.js';
 
-const BATCH_SIZE = 10;
 const MAX_TOOL_CALLS = 5;
 const AUTO_REORG_THRESHOLD = 13;
 const LLM_LOG_LIMIT = 30;
@@ -86,7 +85,33 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
     return { added, total: data.prs.length };
   }
 
-  /** Classify unannotated PRs (or all, with force) into buckets, in batches. */
+  /**
+   * Deterministic enrichment: pull the PR's discussion (comments + reviews)
+   * once and cache it on the PR. Best-effort — a stub github, no comments, or
+   * a transient gh failure all resolve to an empty list rather than blocking
+   * the summary. The cache (`pr.comments !== undefined`) keeps it to one call.
+   */
+  async function ensureDetails(repo, pr) {
+    if (pr.comments !== undefined) return;
+    if (!github || typeof github.fetchPRDetails !== 'function') {
+      pr.comments = [];
+      return;
+    }
+    try {
+      const details = await github.fetchPRDetails(repo, pr.number);
+      pr.comments = Array.isArray(details?.comments) ? details.comments : [];
+    } catch {
+      pr.comments = [];
+    }
+  }
+
+  /**
+   * Summarize unannotated PRs (or all, with force) one at a time: each PR gets
+   * its discussion pulled deterministically, then a single structured LLM pass
+   * producing bucket + work type + a multi-sentence detail for sprint planning.
+   * Per-PR (not batched) so each summary is deep and the exchange is inspectable
+   * on its own; cheap in steady state since auto-poll only feeds new merges.
+   */
   async function categorize(sprintId, { force = false } = {}) {
     const { repo, data } = load(sprintId);
     if (force) {
@@ -98,32 +123,25 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
     }
     const targets = data.prs.filter((p) => !p.ann);
     if (!targets.length) {
-      emit({ task: 'categorize', message: 'Nothing new to classify.', done: true });
+      emit({ task: 'categorize', message: 'Nothing new to summarize.', done: true });
       return { classified: 0, buckets: data.buckets.length, autoReorganized: false };
     }
 
-    const batches = [];
-    for (let i = 0; i < targets.length; i += BATCH_SIZE) batches.push(targets.slice(i, i + BATCH_SIZE));
-
     let classified = 0;
-    for (let i = 0; i < batches.length; i += 1) {
+    for (let i = 0; i < targets.length; i += 1) {
+      const pr = targets[i];
       emit({
         task: 'categorize',
-        message: `Asking Gemma to classify batch ${i + 1}/${batches.length} (${batches[i].length} PRs)…`,
+        message: `Summarizing PR #${pr.number} (${i + 1}/${targets.length})…`,
         current: i + 1,
-        total: batches.length,
+        total: targets.length,
       });
-      const messages = buildClassifyMessages({
-        repo,
-        buckets: bucketSummaries(data),
-        prs: batches[i],
-      });
-      const content = await loggedChat(sprintId, data, 'classify',
-        `batch ${i + 1}/${batches.length} · ${batches[i].length} PRs`,
-        { messages, schema: CLASSIFY_SCHEMA });
-      const parsed = extractJson(content);
-      classified += applyClassifications(data, parsed.classifications || []);
-      store.saveSprintData(sprintId, data); // persist per batch — long runs survive interruption
+      await ensureDetails(repo, pr);
+      const messages = buildSummarizeMessages({ repo, buckets: bucketSummaries(data), pr });
+      const content = await loggedChat(sprintId, data, 'summarize', `#${pr.number} ${truncate(pr.title, 60)}`,
+        { messages, schema: PR_SUMMARY_SCHEMA });
+      classified += applyClassifications(data, [{ number: pr.number, ...extractJson(content) }]);
+      store.saveSprintData(sprintId, data); // persist per PR — long runs survive interruption
     }
 
     let autoReorganized = false;
@@ -132,8 +150,55 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
       await reorganize(sprintId);
       autoReorganized = true;
     }
-    emit({ task: 'categorize', message: `Classified ${classified} PRs.`, done: true });
+    emit({ task: 'categorize', message: `Summarized ${classified} PRs.`, done: true });
     return { classified, buckets: store.getSprintData(sprintId).buckets.length, autoReorganized };
+  }
+
+  /**
+   * Build the exact summarize prompt for one PR WITHOUT firing it — for the
+   * inspector UI. Pulls the discussion and the diff so the panel can show the
+   * raw material next to the generated prompt.
+   */
+  async function inspectPR(sprintId, prNumber) {
+    const { repo, data } = load(sprintId);
+    const pr = data.prs.find((p) => p.number === prNumber);
+    if (!pr) throw new Error(`PR #${prNumber} not in this sprint`);
+    // Pull the discussion for the prompt preview, but don't persist here:
+    // inspect runs unlocked, so writing could race a concurrent scan. The
+    // durable cache happens in summarizePR / categorize, which hold the lock.
+    await ensureDetails(repo, pr);
+
+    let diff = null;
+    if (github && typeof github.fetchPRDiff === 'function') {
+      diff = await github.fetchPRDiff(repo, prNumber).catch((e) => ({ diff: '', error: e.message }));
+    }
+    return {
+      pr,
+      bucket: data.buckets.find((b) => b.id === pr.bucketId) || null,
+      messages: buildSummarizeMessages({ repo, buckets: bucketSummaries(data), pr }),
+      diff,
+    };
+  }
+
+  /**
+   * Re-run the summarizer for a single PR and apply the result — the "fire it
+   * and see how it behaves per PR" control. The exchange is logged like any
+   * other, so it shows up in the Prompts tab.
+   */
+  async function summarizePR(sprintId, prNumber) {
+    const { repo, data } = load(sprintId);
+    const pr = data.prs.find((p) => p.number === prNumber);
+    if (!pr) throw new Error(`PR #${prNumber} not in this sprint`);
+    await ensureDetails(repo, pr);
+    const messages = buildSummarizeMessages({ repo, buckets: bucketSummaries(data), pr });
+    emit({ task: 'summarize', message: `Summarizing PR #${pr.number}…` });
+    const content = await loggedChat(sprintId, data, 'summarize', `#${pr.number} ${truncate(pr.title, 60)} (manual)`,
+      { messages, schema: PR_SUMMARY_SCHEMA });
+    const parsed = extractJson(content);
+    applyClassifications(data, [{ number: pr.number, ...parsed }]);
+    store.saveSprintData(sprintId, data);
+    emit({ task: 'summarize', message: `PR #${pr.number} summarized.`, done: true });
+    return { pr: data.prs.find((p) => p.number === prNumber), parsed, content, messages };
   }
 
   /** LLM pass that merges/renames buckets to keep the radar coherent. */
@@ -220,7 +285,7 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
     return report;
   }
 
-  return { sync, categorize, reorganize, generateReport };
+  return { sync, categorize, reorganize, generateReport, inspectPR, summarizePR };
 }
 
 // ---- pure helpers (exported for tests) ----
@@ -266,6 +331,8 @@ export function applyClassifications(data, classifications) {
       flagName: String(c.flag_name || ''),
       userFacing: Boolean(c.user_facing),
       summary: String(c.summary || ''),
+      detail: String(c.detail || ''),
+      risk: ['low', 'medium', 'high'].includes(c.risk) ? c.risk : undefined,
       classifiedAt: new Date().toISOString(),
     };
     applied += 1;

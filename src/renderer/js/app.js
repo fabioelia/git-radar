@@ -9,6 +9,7 @@ import { renderDashboard } from './views/dashboard.js';
 import { renderReport } from './views/report.js';
 import { renderPrompts, exchangeToText } from './views/prompts.js';
 import { renderSettings } from './views/settings.js';
+import { renderInspector } from './views/inspector.js';
 
 const state = {
   appInfo: null,
@@ -105,6 +106,8 @@ function mainView() {
 }
 
 function modalHtml() {
+  if (state.modal.type === 'pr-inspect') return renderInspector(state.modal);
+
   if (state.modal.type === 'rename-bucket') {
     return `
     <div class="modal-backdrop" data-action="modal-close">
@@ -289,6 +292,43 @@ const actions = {
     render();
   },
 
+  'inspect-pr': async (el) => {
+    const prNumber = Number(el.dataset.pr);
+    state.modal = { type: 'pr-inspect', prNumber, loading: true };
+    render();
+    try {
+      state.modal.data = await api.prInspect(state.currentSprintId, prNumber);
+    } catch (e) {
+      state.modal.error = e.message;
+    }
+    if (state.modal?.type === 'pr-inspect') state.modal.loading = false;
+    render();
+  },
+  'run-pr-summary': async (el) => {
+    if (state.modal?.type !== 'pr-inspect') return;
+    const prNumber = Number(el.dataset.pr);
+    state.modal.running = true;
+    render();
+    try {
+      const res = await api.prSummarize(state.currentSprintId, prNumber);
+      state.modal.result = { content: res.content };
+      state.modal.data = await api.prInspect(state.currentSprintId, prNumber); // refresh prompt + current summary
+      await refreshData();
+      toast('ok', `PR #${prNumber} summarized`);
+    } catch (e) {
+      toast('error', e.message);
+    } finally {
+      if (state.modal?.type === 'pr-inspect') state.modal.running = false;
+      render();
+    }
+  },
+  'copy-prompt': async () => {
+    const msgs = state.modal?.data?.messages || [];
+    if (!msgs.length) return;
+    await navigator.clipboard.writeText(msgs.map((m) => `## ${m.role}\n${m.content}`).join('\n\n'));
+    toast('ok', 'Prompt copied');
+  },
+
   'add-repo': () => {
     state.modal = { type: 'repo' };
     render();
@@ -353,6 +393,8 @@ const actions = {
       numCtx: Number(document.getElementById('set-numctx')?.value) || 16384,
       temperature: Number.isFinite(temp) ? temp : 0.2,
       mcpServers,
+      autoPoll: document.getElementById('set-autopoll')?.checked || false,
+      autoPollMinutes: Number(document.getElementById('set-autopoll-mins')?.value) || 15,
     });
     toast('ok', 'Settings saved');
     api.healthCheck().then((h) => {
@@ -477,6 +519,16 @@ async function init() {
         state.task.message = p.message;
         const el = document.getElementById('task-message');
         if (el) el.textContent = p.message;
+      }
+    });
+
+    // Background auto-poll picked up new merges — refresh if it's the sprint on screen.
+    api.onDataChanged(async (p) => {
+      if (state.task || state.modal) return; // don't disrupt an in-progress run or open modal
+      if (p?.sprintId && p.sprintId === state.currentSprintId) {
+        await refreshData();
+        render();
+        toast('ok', 'Auto-poll picked up new merges');
       }
     });
   } catch (e) {

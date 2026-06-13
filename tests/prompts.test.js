@@ -4,7 +4,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReportMessages, prLedger } from '../src/main/services/prompts.js';
+import { buildReportMessages, prLedger, buildSummarizeMessages, PR_SUMMARY_SCHEMA } from '../src/main/services/prompts.js';
 
 const repo = { owner: 'acme', name: 'newton', contextPrompt: 'develop → stage → main' };
 const sprint = { name: 'Sprint 1', startDate: '2026-06-08', endDate: '2026-06-28' };
@@ -62,6 +62,46 @@ test('prLedger caps the listing but tells the reader how many were omitted', () 
 test('prLedger ignores PRs that never merged', () => {
   const out = prLedger({ buckets: [], prs: [pr(1, { mergedAt: null })] });
   assert.match(out, /no merged PRs in this window/);
+});
+
+test('buildSummarizeMessages puts the PR, its files and its discussion in the prompt', () => {
+  const prWithComments = pr(55, {
+    author: 'dana',
+    comments: [
+      { kind: 'review', state: 'approved', author: 'lead', body: 'ship it' },
+      { kind: 'review_comment', author: 'sam', body: 'guard this null', path: 'src/pay.ts' },
+    ],
+  });
+  const messages = buildSummarizeMessages({ repo: { owner: 'a', name: 'b', contextPrompt: '' }, buckets: [], pr: prWithComments });
+  assert.equal(messages.length, 2);
+  const user = messages[1].content;
+  assert.match(user, /ANALYZE THIS PR:/);
+  assert.match(user, /#55 "PR 55"/);
+  assert.match(user, /packages\/checkout\/file55\.ts/); // file list present
+  assert.match(user, /PR DISCUSSION \(2 items\)/);
+  assert.match(user, /\[review\/approved\] lead: ship it/);
+  assert.match(user, /\[inline src\/pay\.ts\] sam: guard this null/);
+  // the system prompt asks for the detail + risk fields
+  assert.match(messages[0].content, /detail: 2–4 sentences/);
+});
+
+test('buildSummarizeMessages notes when there is no discussion', () => {
+  const messages = buildSummarizeMessages({ repo: { owner: 'a', name: 'b' }, buckets: [{ name: 'Checkout', description: 'co', prCount: 3 }], pr: pr(1, { comments: [] }) });
+  assert.match(messages[1].content, /PR DISCUSSION: \(none captured\)/);
+  assert.match(messages[1].content, /- Checkout: co \[3 PRs\]/); // existing buckets offered for reuse
+});
+
+test('PR_SUMMARY_SCHEMA requires the planning fields', () => {
+  assert.deepEqual(PR_SUMMARY_SCHEMA.required.sort(), ['behind_flag', 'bucket', 'detail', 'summary', 'user_facing', 'work_type']);
+  assert.deepEqual(PR_SUMMARY_SCHEMA.properties.risk.enum, ['low', 'medium', 'high']);
+});
+
+test('prLedger surfaces the detail and comment count when present', () => {
+  const prs = [pr(9, { comments: [{}, {}, {}], ann: { workType: 'feature', detail: 'Big rework of the cart.', risk: 'high' } })];
+  const out = prLedger({ buckets: [], prs });
+  assert.match(out, /3 comments/);
+  assert.match(out, /high risk/);
+  assert.match(out, /detail: Big rework of the cart\./);
 });
 
 test('buildReportMessages embeds the deterministic ledger in the user turn', () => {

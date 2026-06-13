@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS = {
   numCtx: 16384,
   temperature: 0.2,
   mcpServers: [],
+  autoPoll: false,
+  autoPollMinutes: 15,
 };
 
 function dbPath() {

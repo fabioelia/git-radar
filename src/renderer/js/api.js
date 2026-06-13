@@ -30,6 +30,9 @@ export const api = {
 
   bucketRename: (sprintId, bucketId, name) => call(raw.bucketRename, sprintId, bucketId, name),
   prMove: (sprintId, prNumber, bucketId) => call(raw.prMove, sprintId, prNumber, bucketId),
+  prInspect: (sprintId, prNumber) => call(raw.prInspect, sprintId, prNumber),
+  prSummarize: (sprintId, prNumber) => call(raw.prSummarize, sprintId, prNumber),
 
   onProgress: (cb) => raw.onProgress(cb),
+  onDataChanged: (cb) => raw.onDataChanged(cb),
 };

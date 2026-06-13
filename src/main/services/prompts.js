@@ -6,28 +6,23 @@ import { truncate, formatHours, isoDate } from './util.js';
 
 export const WORK_TYPES = ['feature', 'defect', 'chore', 'infra', 'docs', 'test', 'refactor', 'release'];
 
-export const CLASSIFY_SCHEMA = {
+// One merged PR → one structured record. `detail` and `risk` are the
+// sprint-planning payload: a few sentences a team lead can read, grounded in
+// the description, the changed files and the PR discussion.
+export const PR_SUMMARY_SCHEMA = {
   type: 'object',
   properties: {
-    classifications: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          number: { type: 'integer' },
-          bucket: { type: 'string' },
-          bucket_description: { type: 'string' },
-          work_type: { type: 'string', enum: WORK_TYPES },
-          behind_flag: { type: 'boolean' },
-          flag_name: { type: 'string' },
-          user_facing: { type: 'boolean' },
-          summary: { type: 'string' },
-        },
-        required: ['number', 'bucket', 'work_type', 'behind_flag', 'user_facing', 'summary'],
-      },
-    },
+    bucket: { type: 'string' },
+    bucket_description: { type: 'string' },
+    work_type: { type: 'string', enum: WORK_TYPES },
+    behind_flag: { type: 'boolean' },
+    flag_name: { type: 'string' },
+    user_facing: { type: 'boolean' },
+    summary: { type: 'string' },
+    detail: { type: 'string' },
+    risk: { type: 'string', enum: ['low', 'medium', 'high'] },
   },
-  required: ['classifications'],
+  required: ['bucket', 'work_type', 'behind_flag', 'user_facing', 'summary', 'detail'],
 };
 
 export const REORG_SCHEMA = {
@@ -68,33 +63,58 @@ function prBlock(pr) {
   ];
   if (pr.labels?.length) lines.push(`  labels: ${pr.labels.join(', ')}`);
   if (pr.milestone) lines.push(`  milestone: ${pr.milestone}`);
-  if (pr.dirs?.length) lines.push(`  dirs: ${pr.dirs.map((d) => `${d.dir} (${d.files})`).join(', ')}`);
+  if (pr.files?.length) {
+    const list = pr.files.slice(0, 12).map((f) => {
+      const p = typeof f === 'string' ? f : f.path;
+      const churn = f && typeof f === 'object' && (f.additions || f.deletions) ? ` (+${f.additions}/-${f.deletions})` : '';
+      return `${p}${churn}`;
+    });
+    const more = pr.files.length > 12 ? ` … (+${pr.files.length - 12} more)` : '';
+    lines.push(`  files: ${list.join(', ')}${more}`);
+  } else if (pr.dirs?.length) {
+    lines.push(`  dirs: ${pr.dirs.map((d) => `${d.dir} (${d.files})`).join(', ')}`);
+  }
   if (pr.body) lines.push(`  body: ${truncate(pr.body.replace(/\s+/g, ' '), 700)}`);
   return lines.join('\n');
 }
 
-export function buildClassifyMessages({ repo, buckets, prs }) {
+/** The PR discussion (comments + reviews) rendered for the summarizer. */
+function commentsBlock(pr) {
+  if (!pr.comments?.length) return 'PR DISCUSSION: (none captured)';
+  const lines = pr.comments.map((c) => {
+    const tag = c.kind === 'review'
+      ? `review/${c.state || 'commented'}`
+      : c.kind === 'review_comment'
+        ? `inline${c.path ? ` ${truncate(c.path, 50)}` : ''}`
+        : 'comment';
+    const body = truncate(String(c.body || '').replace(/\s+/g, ' '), 300);
+    return `- [${tag}] ${c.author}: ${body}`;
+  });
+  return `PR DISCUSSION (${pr.comments.length} item${pr.comments.length === 1 ? '' : 's'}):\n${lines.join('\n')}`;
+}
+
+export function buildSummarizeMessages({ repo, buckets, pr }) {
   const system = `You are Git Radar, an analyst tracking a software team's release cycle.
 
 ${repoContextBlock(repo)}
 
-Your job: classify merged pull requests into named buckets of work.
+Your job: analyze ONE merged pull request and return a structured record the team can read at sprint planning.
 
 Bucket rules:
 - A bucket is what the work is ABOUT: a feature, initiative, subsystem or workstream (e.g. "Checkout Redesign", "Payments Service", "CI & Tooling").
-- NEVER create buckets named after work types ("Bug Fixes", "Misc", "Improvements"). A defect fix for the checkout flow belongs in the checkout bucket with work_type "defect" — that is how defect-chasing time per feature gets measured.
-- Reuse an existing bucket whenever the PR plausibly belongs to it. Create a new bucket only for a genuinely new stream of work, and give it a one-line bucket_description.
-- Keep bucket names short Title Case (1–4 words).
-- PRs that merge one long-lived branch into another (develop → stage, stage → main, release/* or hotfix back-merges) are release mechanics: bucket "Release Operations", work_type "release".
+- NEVER name a bucket after a work type ("Bug Fixes", "Misc", "Improvements"). A defect fix for the checkout flow belongs in the checkout bucket with work_type "defect" — that is how defect-chasing time per feature gets measured.
+- Reuse an existing bucket whenever the PR plausibly belongs to it. Coin a new bucket only for a genuinely new stream of work, with a one-line bucket_description. Keep names short Title Case (1–4 words).
+- A PR that merges one long-lived branch into another (develop → stage, stage → main, release/* or hotfix back-merges) is release mechanics: bucket "Release Operations", work_type "release".
 
-Per-PR fields:
+Fields:
 - work_type: ${WORK_TYPES.join(' | ')}. "defect" = fixing broken behavior; "feature" = new/changed capability.
-- behind_flag: true when the change is gated behind a feature flag/toggle (look for flag mentions in title, body, labels).
-- flag_name: the flag identifier when stated, else "".
+- behind_flag / flag_name: is the change gated behind a feature flag/toggle? Look in the title, body, labels and discussion; name the flag if stated.
 - user_facing: true only if end users can see or feel the change once released (false for internal tooling, refactors, flagged-off work).
-- summary: one plain-language sentence on what the PR did.
+- summary: ONE plain-language sentence on what the PR did.
+- detail: 2–4 sentences for the team lead — what changed, why, and any risk or follow-up that is evident from the description, the changed files and the PR discussion. Ground every claim in the data provided; do not invent.
+- risk: low | medium | high — your read of release risk given the size, area touched and discussion.
 
-Respond with JSON matching the provided schema, one classification per PR, in the same order.`;
+Respond with JSON matching the provided schema.`;
 
   const bucketList = buckets.length
     ? buckets.map((b) => `- ${b.name}: ${b.description || '(no description)'} [${b.prCount} PRs]`).join('\n')
@@ -103,9 +123,11 @@ Respond with JSON matching the provided schema, one classification per PR, in th
   const user = `EXISTING BUCKETS:
 ${bucketList}
 
-Classify these ${prs.length} merged PRs:
+ANALYZE THIS PR:
 
-${prs.map(prBlock).join('\n\n')}`;
+${prBlock(pr)}
+
+${commentsBlock(pr)}`;
 
   return [
     { role: 'system', content: system },
@@ -232,9 +254,11 @@ function prLedgerLine(pr) {
   const ann = pr.ann || {};
   const type = ann.workType || 'unclassified';
   const flag = ann.behindFlag ? ` [flag${ann.flagName ? `:${ann.flagName}` : ''}]` : '';
+  const comments = pr.comments?.length ? ` · ${pr.comments.length} comments` : '';
+  const risk = ann.risk ? ` · ${ann.risk} risk` : '';
   const lines = [
-    `#${pr.number} "${truncate(pr.title, 120)}" — ${pr.author} · ${type}${flag}`,
-    `   ${pr.base || '?'} ← ${truncate(pr.head || '?', 50)} · merged ${pr.mergedAt ? isoDate(pr.mergedAt) : '?'} · +${pr.additions}/-${pr.deletions} in ${pr.changedFiles} files`,
+    `#${pr.number} "${truncate(pr.title, 120)}" — ${pr.author} · ${type}${flag}${risk}`,
+    `   ${pr.base || '?'} ← ${truncate(pr.head || '?', 50)} · merged ${pr.mergedAt ? isoDate(pr.mergedAt) : '?'} · +${pr.additions}/-${pr.deletions} in ${pr.changedFiles} files${comments}`,
   ];
 
   const paths = pr.files?.length
@@ -245,8 +269,12 @@ function prLedgerLine(pr) {
     lines.push(`   files: ${truncate(paths.join(', '), 240)}${more}`);
   }
 
-  const desc = ann.summary || pr.body;
-  if (desc) lines.push(`   ${ann.summary ? 'summary' : 'body'}: ${truncate(String(desc).replace(/\s+/g, ' '), 220)}`);
+  // Prefer the LLM's multi-sentence detail; fall back to the one-liner, then body.
+  const desc = ann.detail || ann.summary || pr.body;
+  if (desc) {
+    const label = ann.detail ? 'detail' : ann.summary ? 'summary' : 'body';
+    lines.push(`   ${label}: ${truncate(String(desc).replace(/\s+/g, ' '), 280)}`);
+  }
   return lines.join('\n');
 }
 

@@ -121,6 +121,79 @@ export function topFiles(files, top = 50) {
 }
 
 /**
+ * Fetch the discussion on a single PR deterministically: issue comments,
+ * review verdicts (+ their bodies), and inline review comments. None of this
+ * is in `gh pr list`, so it's a per-PR call — cheap when done incrementally
+ * (new merges only). Every leg is best-effort: a PR with no comments, or a
+ * transient gh hiccup, just yields an empty list rather than failing the run.
+ */
+export async function fetchPRDetails(repo, number) {
+  const slug = `${repo.owner}/${repo.name}`;
+  let view = {};
+  try {
+    const out = await gh(
+      ['pr', 'view', String(number), '--repo', slug, '--json', 'comments,reviews'],
+      { timeout: 60000 },
+    );
+    view = JSON.parse(out || '{}');
+  } catch {
+    view = {};
+  }
+
+  let reviewComments = [];
+  try {
+    // Inline (line-level) review comments aren't exposed by `gh pr view`.
+    const out = await gh(['api', `repos/${slug}/pulls/${number}/comments`], { timeout: 60000 });
+    reviewComments = JSON.parse(out || '[]');
+  } catch {
+    reviewComments = [];
+  }
+
+  return { comments: normalizeComments({ view, reviewComments }) };
+}
+
+/**
+ * The unified diff for one PR, for the inspector UI. Capped so a giant PR
+ * can't lock up the renderer; the cap is reported so the UI can say so.
+ */
+export async function fetchPRDiff(repo, number, { maxChars = 200000 } = {}) {
+  const slug = `${repo.owner}/${repo.name}`;
+  const out = await gh(['pr', 'diff', String(number), '--repo', slug], { timeout: 60000 });
+  const text = out || '';
+  return text.length > maxChars
+    ? { diff: text.slice(0, maxChars), truncated: true, totalChars: text.length }
+    : { diff: text, truncated: false, totalChars: text.length };
+}
+
+/**
+ * Flatten the three comment sources into one chronological list of
+ * `{ kind, author, body, ... }`, trimmed and capped so a noisy thread can't
+ * blow up the summarizer's context.
+ */
+export function normalizeComments({ view = {}, reviewComments = [] } = {}, max = 40) {
+  const out = [];
+  for (const c of view.comments || []) {
+    const body = (c?.body || '').trim();
+    if (!body) continue;
+    out.push({ kind: 'comment', author: c.author?.login || 'unknown', body: truncate(body, 600), createdAt: c.createdAt || null });
+  }
+  for (const r of view.reviews || []) {
+    const body = (r?.body || '').trim();
+    const state = r?.state ? String(r.state).toLowerCase() : '';
+    if (!body && !state) continue;
+    out.push({ kind: 'review', author: r.author?.login || 'unknown', state, body: truncate(body, 600), createdAt: r.submittedAt || null });
+  }
+  for (const rc of reviewComments) {
+    const body = (rc?.body || '').trim();
+    if (!body) continue;
+    out.push({ kind: 'review_comment', author: rc.user?.login || 'unknown', body: truncate(body, 400), path: rc.path || '', createdAt: rc.created_at || null });
+  }
+  return out
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+    .slice(0, max);
+}
+
+/**
  * Condense changed file paths into the top directories touched — in a
  * monorepo, `packages/checkout (14)` tells the classifier more than any
  * individual path. Uses up to two leading path segments.

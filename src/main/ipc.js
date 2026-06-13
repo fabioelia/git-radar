@@ -9,14 +9,16 @@ import * as github from './services/github.js';
 import * as mcp from './services/mcp.js';
 import { createOllama } from './services/ollama.js';
 import { createAnalyzer } from './services/analyzer.js';
+import { createPoller } from './services/poller.js';
 import { computeStats } from './services/stats.js';
 
 export function registerIpc(getWindow, appInfo) {
   const ollama = createOllama(() => store.getSettings());
-  const emit = (progress) => {
+  const send = (channel, payload) => {
     const win = getWindow();
-    if (win && !win.isDestroyed()) win.webContents.send('grx:progress', progress);
+    if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
   };
+  const emit = (progress) => send('grx:progress', progress);
   const analyzer = createAnalyzer({ store, ollama, github, mcp, emit });
 
   let runningTask = null;
@@ -29,6 +31,25 @@ export function registerIpc(getWindow, appInfo) {
       runningTask = null;
     }
   };
+
+  // One scan = sync + per-PR summarize. Shared by the manual button and the poller.
+  const scan = exclusive('scan', async (id) => {
+    const synced = await analyzer.sync(id);
+    const categorized = await analyzer.categorize(id, { force: false });
+    return { ...synced, ...categorized };
+  });
+
+  // Background "check for updates": polls gh and, when a poll picks up changes,
+  // nudges the renderer to refresh the affected sprint.
+  const poller = createPoller({
+    store,
+    scan,
+    emit: (p) => {
+      emit(p);
+      if (p.changed) send('grx:data-changed', { sprintId: p.sprintId });
+    },
+  });
+  poller.apply(store.getSettings());
 
   const handle = (channel, fn) => {
     ipcMain.handle(channel, async (_event, ...args) => {
@@ -43,7 +64,11 @@ export function registerIpc(getWindow, appInfo) {
   // ---- app / settings / health ----
   handle('app:info', () => ({ ...appInfo, dataDir: store.getDataDir() }));
   handle('settings:get', () => store.getSettings());
-  handle('settings:save', (settings) => store.saveSettings(settings));
+  handle('settings:save', (settings) => {
+    const saved = store.saveSettings(settings);
+    poller.apply(saved); // start/stop/reschedule the background poll
+    return saved;
+  });
   handle('health:check', async () => {
     const settings = store.getSettings();
     const [gh, ol] = await Promise.all([github.checkGh(), ollama.health()]);
@@ -83,11 +108,12 @@ export function registerIpc(getWindow, appInfo) {
   handle('sprint:categorize', exclusive('categorize', (id, opts) => analyzer.categorize(id, opts || {})));
   handle('sprint:reorganize', exclusive('reorganize', (id) => analyzer.reorganize(id)));
   handle('sprint:report', exclusive('report', (id) => analyzer.generateReport(id)));
-  handle('sprint:scan', exclusive('scan', async (id) => {
-    const synced = await analyzer.sync(id);
-    const categorized = await analyzer.categorize(id, { force: false });
-    return { ...synced, ...categorized };
-  }));
+  handle('sprint:scan', scan);
+
+  // Per-PR inspector: build the exact prompt (no LLM) + pull diff/discussion,
+  // and re-fire the summarizer for one PR to test how it behaves.
+  handle('pr:inspect', (sprintId, prNumber) => analyzer.inspectPR(sprintId, prNumber));
+  handle('pr:summarize', exclusive('summarize', (sprintId, prNumber) => analyzer.summarizePR(sprintId, prNumber)));
 
   // ---- manual curation ----
   handle('bucket:rename', (sprintId, bucketId, name) => {

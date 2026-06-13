@@ -27,10 +27,17 @@ contextBridge.exposeInMainWorld('gitRadar', {
 
   bucketRename: invoke('bucket:rename'),
   prMove: invoke('pr:move'),
+  prInspect: invoke('pr:inspect'),
+  prSummarize: invoke('pr:summarize'),
 
   onProgress: (cb) => {
     const listener = (_event, progress) => cb(progress);
     ipcRenderer.on('grx:progress', listener);
     return () => ipcRenderer.removeListener('grx:progress', listener);
+  },
+  onDataChanged: (cb) => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('grx:data-changed', listener);
+    return () => ipcRenderer.removeListener('grx:data-changed', listener);
   },
 });

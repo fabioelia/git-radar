@@ -4,7 +4,7 @@
 
 import { escapeHtml, formatHours, timeAgo } from '../util.js';
 
-const TASK_COLORS = { classify: '#4da3ff', reorganize: '#ffd166', report: '#3ddc97' };
+const TASK_COLORS = { summarize: '#4da3ff', reorganize: '#ffd166', report: '#3ddc97' };
 
 export function renderPrompts(state) {
   const log = state.data.llmLog || [];
@@ -13,7 +13,7 @@ export function renderPrompts(state) {
     return `
     <section class="card empty-state">
       <h2>No LLM calls yet</h2>
-      <p>Every prompt Git Radar sends to Gemma lands here verbatim — classification batches,
+      <p>Every prompt Git Radar sends to Gemma lands here verbatim — per-PR summaries,
       bucket reorganizations, and each report turn (including MCP tool results fed back).
       Run <strong>📡 Scan</strong> or <strong>📝 Report</strong> and the full exchanges will show up,
       newest first. Your repo's release-cycle prompt is embedded in every system message.</p>
@@ -24,7 +24,7 @@ export function renderPrompts(state) {
   <section class="buckets-head">
     <h2>LLM exchanges <span class="muted">${log.length} most recent</span></h2>
     <p class="hint">Verbatim record of what was sent to <code>${escapeHtml(log[0].model || '')}</code> and what came back.
-    Classification and reorganization calls are constrained to a JSON schema; report calls are free-form.</p>
+    Per-PR summary and reorganization calls are constrained to a JSON schema; report calls are free-form.</p>
   </section>
   ${log.map(entry).join('')}`;
 }
