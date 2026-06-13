@@ -40,6 +40,12 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
    feature. Buckets get reorganized (merged/renamed) by a second LLM pass when they
    proliferate.
 
+   Processing the queue: **Scan** syncs new merges and summarizes every not-yet-summarized
+   PR in one run (progress shown per PR); **Summarize pending** (the ⋯ menu, or the banner
+   on the radar) runs the local LLM over the synced-but-unsummarized backlog *without*
+   re-syncing; and **auto-poll** does both automatically as merges land. The 🔍 inspector
+   is for one PR at a time when you want to watch or tune it.
+
    - **🔍 Inspect a PR** — open any PR to see its diff, its discussion, the *exact* prompt
      Git Radar generates for it, and a button to re-fire the summarizer and watch how it
      behaves — handy for tuning the release-cycle prompt per merge.

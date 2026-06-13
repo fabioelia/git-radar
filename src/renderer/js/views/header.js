@@ -8,6 +8,7 @@ export function sprintHeader(state) {
   const { repo, sprint, sprints } = d;
   const progress = sprintProgress(sprint);
   const busy = Boolean(state.task);
+  const pending = d.stats?.totals?.byType?.unclassified || 0;
 
   const sprintOptions = [...sprints]
     .reverse()
@@ -41,14 +42,15 @@ export function sprintHeader(state) {
         ${busy
           ? `<span class="pill busy"><span class="spinner"></span><span id="task-message">${escapeHtml(state.task.message || 'Working…')}</span></span>`
           : `
-        <button class="btn primary" data-action="scan" title="Sync merged PRs, then classify new ones with the local LLM">📡 Scan</button>
+        <button class="btn primary" data-action="scan" title="Sync merged PRs, then summarize any not-yet-summarized ones with the local LLM">📡 Scan</button>
         <button class="btn" data-action="gen-report" title="Generate the sprint report (uses MCP tools when configured)">📝 Report</button>
         <details class="more">
           <summary class="btn ghost" title="More pipeline actions">⋯</summary>
           <div class="menu">
             <button class="menu-item" data-action="sync">Sync PRs only</button>
+            <button class="menu-item" data-action="summarize-pending" title="Run the local LLM over PRs that are synced but not yet summarized — no re-sync, no wipe">Summarize pending PRs${pending ? ` (${pending})` : ''}</button>
             <button class="menu-item" data-action="reorganize">Reorganize buckets</button>
-            <button class="menu-item danger" data-action="recategorize">Re-classify everything</button>
+            <button class="menu-item danger" data-action="recategorize">Re-summarize everything</button>
           </div>
         </details>`}
       </div>

@@ -8,6 +8,7 @@ export function renderDashboard(state) {
   const { stats } = d;
   return `
     ${kpis(stats)}
+    ${pendingBanner(state)}
     <section class="card">
       <h2 class="card-title">Merge timeline <span class="muted">per base branch</span></h2>
       ${timelineChart(stats.timeline)}
@@ -15,6 +16,28 @@ export function renderDashboard(state) {
     ${bucketsSection(state)}
     ${unbucketedSection(state)}
   `;
+}
+
+/** Count of merged PRs synced but not yet run through the summarizer. */
+function pendingCount(state) {
+  return state.data.stats?.totals?.byType?.unclassified || 0;
+}
+
+/**
+ * When some PRs are summarized and others aren't, surface the backlog with a
+ * one-click batch action. (When NOTHING is summarized yet, the buckets section
+ * carries the same CTA, so we don't double up here.)
+ */
+function pendingBanner(state) {
+  const pending = pendingCount(state);
+  if (!pending || !state.data.buckets.length) return '';
+  return `
+  <section class="card pending-banner">
+    <div><strong>${pending} PR${pending === 1 ? '' : 's'} pending summary</strong>
+      <span class="muted"> — synced, but not yet run through the local LLM.</span></div>
+    <span class="spacer"></span>
+    <button class="btn primary" data-action="summarize-pending">Summarize ${pending} pending</button>
+  </section>`;
 }
 
 function kpis(stats) {
@@ -46,8 +69,12 @@ function bucketsSection(state) {
     const loose = [...d.prs].sort((a, b) => String(b.mergedAt).localeCompare(String(a.mergedAt)));
     return `
     <section class="card">
-      <h2 class="card-title">${d.prs.length} merged PRs <span class="muted">not summarized yet</span></h2>
-      <p class="hint">Hit <strong>📡 Scan</strong> (or “Re-classify everything”) to summarize them into buckets with the local LLM —
+      <div class="pending-head">
+        <h2 class="card-title">${d.prs.length} merged PRs <span class="muted">not summarized yet</span></h2>
+        <span class="spacer"></span>
+        <button class="btn primary" data-action="summarize-pending">Summarize all ${d.prs.length}</button>
+      </div>
+      <p class="hint">Run the whole queue through the local LLM at once with the button above —
       or 🔍 inspect any PR to see its diff and discussion, view the generated prompt, and run the summary on just that one.</p>
       <ul class="pr-list">${loose.map((p) => prRow(p, d.buckets)).join('')}</ul>
     </section>`;

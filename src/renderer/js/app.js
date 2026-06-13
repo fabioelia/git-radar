@@ -247,18 +247,25 @@ const actions = {
   scan: () =>
     runTask('scan', async () => {
       const r = await api.sprintScan(state.currentSprintId);
-      toast('ok', `Scan done: ${r.added} new PR${r.added === 1 ? '' : 's'}, ${r.classified} classified, ${r.buckets} buckets${r.autoReorganized ? ' (auto-reorganized)' : ''}`);
+      toast('ok', `Scan done: ${r.added} new PR${r.added === 1 ? '' : 's'}, ${r.classified} summarized, ${r.buckets} buckets${r.autoReorganized ? ' (auto-reorganized)' : ''}`);
     }),
   sync: () =>
     runTask('sync', async () => {
       const r = await api.sprintSync(state.currentSprintId);
       toast('ok', `Synced: ${r.added} new, ${r.total} total merged PRs`);
     }),
+  'summarize-pending': () =>
+    runTask('summarize', async () => {
+      const r = await api.sprintCategorize(state.currentSprintId, { force: false });
+      toast('ok', r.classified
+        ? `Summarized ${r.classified} pending PR${r.classified === 1 ? '' : 's'} into ${r.buckets} buckets${r.autoReorganized ? ' (auto-reorganized)' : ''}`
+        : 'Nothing pending — all merged PRs are already summarized');
+    }),
   recategorize: () => {
-    if (!window.confirm('Re-classify ALL PRs from scratch? Buckets for this sprint will be rebuilt.')) return;
-    runTask('classify', async () => {
+    if (!window.confirm('Re-summarize ALL PRs from scratch? Buckets for this sprint will be rebuilt.')) return;
+    runTask('summarize', async () => {
       const r = await api.sprintCategorize(state.currentSprintId, { force: true });
-      toast('ok', `Re-classified ${r.classified} PRs into ${r.buckets} buckets`);
+      toast('ok', `Re-summarized ${r.classified} PRs into ${r.buckets} buckets`);
     });
   },
   reorganize: () =>
