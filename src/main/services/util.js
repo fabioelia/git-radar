@@ -67,6 +67,14 @@ export function uniq(arr) {
   return [...new Set(arr)];
 }
 
+/** Small, stable, non-cryptographic string hash (djb2) for cache fingerprints. */
+export function hashString(s) {
+  let h = 5381;
+  const str = String(s ?? '');
+  for (let i = 0; i < str.length; i += 1) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 export function clamp(n, lo, hi) {
   return Math.min(hi, Math.max(lo, n));
 }

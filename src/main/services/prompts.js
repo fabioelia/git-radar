@@ -2,7 +2,7 @@
 // (features/initiatives/subsystems), never work types — that's what makes
 // "time chasing defects for feature X" computable later.
 
-import { truncate, formatHours, isoDate } from './util.js';
+import { truncate, formatHours, isoDate, hashString } from './util.js';
 
 export const WORK_TYPES = ['feature', 'defect', 'chore', 'infra', 'docs', 'test', 'refactor', 'release'];
 
@@ -13,14 +13,8 @@ export const WORK_TYPES = ['feature', 'defect', 'chore', 'infra', 'docs', 'test'
 // or you edited the release-cycle prompt) — never just because a scan ran again.
 export const PROMPT_VERSION = 4;
 
-function djb2(s) {
-  let h = 5381;
-  for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-  return h.toString(36);
-}
-
 export function summaryFingerprint(repo) {
-  return `${PROMPT_VERSION}:${djb2(repo?.contextPrompt || '')}`;
+  return `${PROMPT_VERSION}:${hashString(repo?.contextPrompt || '')}`;
 }
 
 /** A PR needs (re)summarizing if it has no annotation or its prompt changed. */
@@ -381,4 +375,108 @@ function compactStats(stats) {
     hiddenWork: stats.hiddenWork.map((h) => ({ bucket: h.name, flags: h.flags, featurePrs: h.featureCount })),
     unbucketed: stats.unbucketed,
   };
+}
+
+// ---- map-reduce report (large sprints) ----
+//
+// One area at a time (MAP) keeps every call small and reliable no matter how big
+// the sprint is; a final synthesis (REDUCE) over the area fragments + the
+// deterministic stats assembles the report. The fragments are cached/persisted
+// by the analyzer, so re-runs only re-map areas whose PRs changed.
+
+/**
+ * Per-PR lines for ONE area's map pass — richer than the global ledger (a single
+ * area fits comfortably), including a short detail. Bounded by charCap.
+ */
+function bucketLedger(prs, { charCap = 16000 } = {}) {
+  const lines = prs.filter((p) => p.mergedAt).map((p) => {
+    const a = p.ann || {};
+    const breaking = a.breaking || p.conventional?.breaking;
+    const markers = `${breaking ? '⚠ ' : ''}${a.security ? '🔒 ' : ''}${a.highlight ? '★ ' : ''}`;
+    const bits = [a.workType || p.conventional?.type || 'unclassified'];
+    if (a.changelogCategory && a.changelogCategory !== 'none') bits.push(a.changelogCategory);
+    bits.push(a.userFacing ? 'user-facing' : (a.audience && a.audience !== 'internal' ? a.audience.replace('_', '-') : 'internal'));
+    if (a.behindFlag) bits.push(`flag${a.flagName ? `:${a.flagName}` : ''}`);
+    if (a.risk && a.risk !== 'low') bits.push(`${a.risk} risk`);
+    let line = `${markers}#${p.number} "${truncate(p.title, 100)}" — ${p.author} · ${bits.join(' · ')}`;
+    if (a.userImpact) line += `\n   → ${truncate(String(a.userImpact).replace(/\s+/g, ' '), 160)}`;
+    const detail = a.detail || (a.userImpact ? '' : p.body);
+    if (detail) line += `\n   ${truncate(String(detail).replace(/\s+/g, ' '), 200)}`;
+    return line;
+  });
+  let out = lines.join('\n');
+  if (out.length > charCap) out = `${out.slice(0, charCap)}\n…(area trimmed)`;
+  return out;
+}
+
+/** MAP step: write the product-notes fragment for ONE area. */
+export function buildBucketSectionMessages({ repo, bucket, prs, bucketStats = {} }) {
+  const system = `You are Git Radar's analyst writing the product-notes fragment for ONE area of a sprint. Output a tight markdown fragment for THIS AREA ONLY — start with content, do NOT add a top-level "#"/"##" heading — in ~120–220 words.
+
+Rules:
+- Lead with user value in plain product language; cite PRs like #123. Write for a product owner.
+- Be specific — never "various fixes", "misc" or "improved performance" without the concrete change. Do NOT paste raw PR titles; rephrase into the reader-facing value.
+- Cover, with short labelled bullets and only when present: what's new for users; notable fixes/reliability; ⚠ breaking changes, deprecations/removals and 🔒 security (with the action a reader must take); and ONE line on internal/under-the-hood work.
+- Keep what end users see separate from developer/admin-facing changes. Use ONLY the PRs provided; do not invent.
+
+${repoContextBlock(repo)}`;
+
+  const user = `AREA: ${bucket.name}${bucket.description ? ` — ${bucket.description}` : ''}
+AREA STATS (deterministic): ${JSON.stringify({
+    prs: bucketStats.prCount,
+    types: bucketStats.byType,
+    userFacing: bucketStats.userFacingCount,
+    defects: bucketStats.defectCount,
+    defectTurnaround: formatHours(bucketStats.defectHours),
+    flags: bucketStats.flags,
+    hiddenFeature: bucketStats.hiddenFeature,
+  })}
+
+PRS IN THIS AREA:
+${bucketLedger(prs)}
+
+Write the product-notes fragment for this area now.`;
+
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
+}
+
+/** REDUCE step: synthesize the per-area fragments + deterministic stats into the report. */
+export function buildReduceMessages({ repo, sprint, stats, sections, tools }) {
+  const system = `You are Git Radar's sprint analyst. Write **product notes** for this release cycle in GitHub-flavored markdown — what shipped and why it matters — for a product owner to skim. Concrete and skimmable, under ~750 words.
+
+You are given (1) deterministic STATS and (2) AREA SECTIONS already drafted per product area. SYNTHESIZE them into one report — do not just concatenate the sections.
+
+Rules:
+- Use ONLY the numbers in the stats JSON for aggregate counts, hours and percentages — never invent them.
+- Pull concrete items and PR citations (#123) from the AREA SECTIONS; rephrase, don't dump. Write user-facing changes in plain product language and keep them separate from developer/admin and internal work.
+- Build the cross-cutting sections from the STATS: the breakingChanges / deprecations / removals / securityFixes lists, the highlights list, and perBucket counts + churn for momentum.
+- Breaking changes, deprecations, removals and security fixes must NEVER be buried — surface them up top with the action a reader must take. (Describe security fixes; do not publish exploit details.)
+- Sections, in order:
+  - "## Headlines" — 3–6 bullets: the most notable things across all areas (new capabilities, integrations, ★ highlights).
+  - "## Breaking changes, deprecations & security" — from the stats lists; omit only if genuinely none.
+  - "## New for users" — user-facing features & improvements as a release-notes changelog, grouped by area; developer/admin-facing changes in their own call-out.
+  - "## New & expanded capabilities" — net-new product surface (integrations, connectors, modes). Skip if none.
+  - "## Fixes & reliability" — defects/stability users feel; defect turnaround is wall-clock exposure, not engineer-hours.
+  - "## Invisible this sprint" — flagged-off + internal/infra work (release mechanics in one line).
+  - "## Where the effort went" — areas by PR count and churn (momentum).${tools.length ? '\n  - "## Planned vs actual" — only if tool data came back.' : ''}
+  - "## Watch-outs" — product risks needing a decision.
+- Skip a section gracefully ("Nothing notable.") rather than padding it.
+
+${repoContextBlock(repo)}${buildToolInstructions(tools)}`;
+
+  const sectionBlock = sections.length
+    ? sections.map((s) => `## ${s.area}\n${s.markdown}`).join('\n\n')
+    : '(no area sections)';
+
+  const user = `Sprint "${sprint.name}" — ${sprint.startDate} → ${sprint.endDate} (today: ${isoDate(new Date())})
+
+STATS (computed deterministically — trust these):
+${JSON.stringify(compactStats(stats))}
+
+AREA SECTIONS (already drafted per area — synthesize, don't dump):
+${sectionBlock}
+
+Write the final product notes now.`;
+
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }

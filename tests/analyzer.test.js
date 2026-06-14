@@ -309,6 +309,49 @@ test('report retries with a slimmer prompt when the model returns a degenerate r
   assert.equal(store.peek().llmLog[0].meta, 'retry (compact prompt)');
 });
 
+test('large sprints map per-area then reduce, and cache area fragments across runs', async () => {
+  const data = {
+    prs: [
+      pr(1, { bucketId: 'a', ann: { workType: 'feature', userFacing: true, userImpact: 'X', summaryFingerprint: 'f1' } }),
+      pr(2, { bucketId: 'b', ann: { workType: 'defect', userFacing: true, summaryFingerprint: 'f2' } }),
+    ],
+    buckets: [{ id: 'a', name: 'Checkout' }, { id: 'b', name: 'Payments' }],
+    reports: [],
+  };
+  const store = memStore({ repo, sprint, data, settings: { reportMapReduceThreshold: 1 } });
+  const calls = [];
+  const ollama = {
+    chat: async ({ messages }) => {
+      const isSection = /fragment for ONE area/.test(messages[0].content);
+      calls.push(isSection ? 'section' : 'reduce');
+      return isSection ? 'area fragment' : '## Headlines\n- shipped stuff';
+    },
+  };
+  const analyzer = createAnalyzer({ store, ollama, github: {}, mcp: {} });
+  const report = await analyzer.generateReport('s1');
+  assert.deepEqual(calls, ['section', 'section', 'reduce']); // 2 areas mapped + 1 synthesis
+  assert.equal(report.strategy, 'map-reduce');
+  assert.equal(report.sections.length, 2);
+  assert.match(report.markdown, /## Headlines/);
+
+  // re-run: PRs unchanged → cached fragments reused, only the reduce fires
+  calls.length = 0;
+  await analyzer.generateReport('s1');
+  assert.deepEqual(calls, ['reduce']);
+});
+
+test('small sprints use the single-pass report', async () => {
+  const store = memStore({
+    repo,
+    sprint,
+    data: { prs: [pr(1, { bucketId: 'a', ann: { workType: 'feature', userFacing: true } })], buckets: [{ id: 'a', name: 'Checkout' }, { id: 'b', name: 'Payments' }], reports: [] },
+  });
+  const ollama = { chat: async () => '## Headlines\n- x' };
+  const analyzer = createAnalyzer({ store, ollama, github: {}, mcp: {} });
+  const report = await analyzer.generateReport('s1');
+  assert.equal(report.strategy, 'single'); // below the default PR threshold
+});
+
 test('report works with no MCP servers configured', async () => {
   const store = memStore({ repo, sprint, data: { prs: [], buckets: [], reports: [] } });
   const ollama = { chat: async () => '## TL;DR\nQuiet sprint.' };

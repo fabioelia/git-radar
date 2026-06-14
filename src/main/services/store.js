@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS = {
   mcpServers: [],
   autoPoll: false,
   autoPollMinutes: 15,
+  reportMapReduceThreshold: 60,
 };
 
 function dbPath() {

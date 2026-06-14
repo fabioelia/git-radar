@@ -6,17 +6,24 @@ import {
   buildSummarizeMessages,
   buildReorgMessages,
   buildReportMessages,
+  buildBucketSectionMessages,
+  buildReduceMessages,
   summaryFingerprint,
   PR_SUMMARY_SCHEMA,
   REORG_SCHEMA,
   WORK_TYPES,
 } from './prompts.js';
 import { computeStats } from './stats.js';
-import { extractJson, extractToolCall, uid, truncate } from './util.js';
+import { extractJson, extractToolCall, uid, truncate, hashString } from './util.js';
 
 const MAX_TOOL_CALLS = 5;
 const AUTO_REORG_THRESHOLD = 13;
 const LLM_LOG_LIMIT = 30;
+// Above this many merged PRs (and ≥2 buckets), the report is built per-area
+// (map) then synthesized (reduce) so no single call overflows the context.
+const REPORT_MAP_REDUCE_PRS = 60;
+// Bump if the per-area (map) prompt changes, to invalidate cached sections.
+const REPORT_SECTION_VERSION = 1;
 
 export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) {
   function load(sprintId) {
@@ -256,36 +263,14 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
     return { operations: applied };
   }
 
-  /** Generate the sprint report; lets the model call MCP tools first if configured. */
-  async function generateReport(sprintId) {
-    const { sprint, repo, data } = load(sprintId);
-    const settings = store.getSettings();
-    const stats = computeStats({ sprint, prs: data.prs, buckets: data.buckets });
-
-    let tools = [];
-    const toolCalls = [];
-    if (settings.mcpServers?.length) {
-      emit({ task: 'report', message: 'Connecting MCP servers…' });
-      const statuses = await mcp.connectServers(settings.mcpServers);
-      tools = mcp.listAllTools();
-      for (const s of statuses.filter((s) => !s.ok)) {
-        toolCalls.push({ name: `connect:${s.name}`, ok: false, error: s.error });
-      }
-    }
-
-    const messages = buildReportMessages({ repo, sprint, stats, buckets: data.buckets, prs: data.prs, tools });
-    emit({ task: 'report', message: 'Asking Gemma to write the sprint report…' });
-
-    let markdown = null;
+  /** The report's prompt-driven MCP tool loop. Returns the final markdown. */
+  async function runReportTurns(sprintId, data, messages, tools, toolCalls) {
     for (let turn = 0; turn <= MAX_TOOL_CALLS; turn += 1) {
       const content = await loggedChat(sprintId, data, 'report',
         turn === 0 ? 'initial prompt' : `after tool turn ${turn}`,
         { messages, temperature: 0.4 });
       const call = tools.length ? extractToolCall(content) : null;
-      if (!call || turn === MAX_TOOL_CALLS) {
-        markdown = content;
-        break;
-      }
+      if (!call || turn === MAX_TOOL_CALLS) return content;
       emit({ task: 'report', message: `Gemma is calling ${call.name}…` });
       let resultText;
       let ok = true;
@@ -302,14 +287,91 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
         content: `TOOL RESULT for ${call.name}:\n${resultText}\n\nCall another tool (JSON only) or write the final markdown report now.`,
       });
     }
+    return null;
+  }
 
-    // Reliability backstop: a too-large prompt can overflow a local model's
-    // context and yield a degenerate, heading-less response (e.g. "Okay").
-    // If that happens, retry once with a deliberately slim, tool-free prompt.
+  /**
+   * MAP step: summarize each area in its own small, reliable LLM call. Fragments
+   * are cached/persisted by a fingerprint of the area's PRs, so re-running a
+   * report only re-maps areas whose PRs (or their summaries) actually changed.
+   */
+  async function mapBucketSections(sprintId, data, repo, stats) {
+    const cache = data.reportSections || {};
+    const withPrs = data.buckets
+      .map((b) => ({ b, prs: data.prs.filter((p) => p.bucketId === b.id && p.mergedAt) }))
+      .filter((x) => x.prs.length);
+
+    const sections = [];
+    for (let i = 0; i < withPrs.length; i += 1) {
+      const { b, prs } = withPrs[i];
+      const fp = sectionFingerprint(prs);
+      if (cache[b.id]?.fingerprint === fp) {
+        emit({ task: 'report', message: `Area ${i + 1}/${withPrs.length}: ${b.name} (cached)`, current: i + 1, total: withPrs.length });
+        sections.push({ area: b.name, markdown: cache[b.id].markdown });
+        continue;
+      }
+      emit({ task: 'report', message: `Summarizing area ${i + 1}/${withPrs.length}: ${b.name}…`, current: i + 1, total: withPrs.length });
+      const bucketStats = stats.perBucket.find((x) => x.id === b.id || x.name === b.name) || {};
+      const messages = buildBucketSectionMessages({ repo, bucket: b, prs, bucketStats });
+      const md = await loggedChat(sprintId, data, 'report-section', truncate(b.name, 40), { messages, temperature: 0.4 });
+      cache[b.id] = { fingerprint: fp, markdown: md };
+      sections.push({ area: b.name, markdown: md });
+      store.saveSprintData(sprintId, data); // persist fragments as they're produced
+    }
+    // Drop cached fragments for buckets that no longer exist.
+    data.reportSections = Object.fromEntries(
+      Object.entries(cache).filter(([id]) => data.buckets.some((b) => b.id === id)),
+    );
+    return sections;
+  }
+
+  /**
+   * Generate the sprint report. Small sprints get one compact pass; large ones
+   * (≥2 buckets and many PRs) are built per-area (map) then synthesized (reduce)
+   * so no single call overflows the model's context. Either path may call MCP
+   * tools during the final pass, and retries once if the model degenerates.
+   */
+  async function generateReport(sprintId) {
+    const { sprint, repo, data } = load(sprintId);
+    const settings = store.getSettings();
+    const stats = computeStats({ sprint, prs: data.prs, buckets: data.buckets });
+    const mergedCount = data.prs.filter((p) => p.mergedAt).length;
+
+    let tools = [];
+    const toolCalls = [];
+    if (settings.mcpServers?.length) {
+      emit({ task: 'report', message: 'Connecting MCP servers…' });
+      const statuses = await mcp.connectServers(settings.mcpServers);
+      tools = mcp.listAllTools();
+      for (const s of statuses.filter((s) => !s.ok)) {
+        toolCalls.push({ name: `connect:${s.name}`, ok: false, error: s.error });
+      }
+    }
+
+    const threshold = Number(settings.reportMapReduceThreshold) || REPORT_MAP_REDUCE_PRS;
+    const useMapReduce = data.buckets.length >= 2 && mergedCount > threshold;
+
+    let sections = null;
+    let messages;
+    let buildRetry;
+    if (useMapReduce) {
+      sections = await mapBucketSections(sprintId, data, repo, stats);
+      messages = buildReduceMessages({ repo, sprint, stats, sections, tools });
+      buildRetry = () => buildReduceMessages({ repo, sprint, stats, sections, tools: [] });
+      emit({ task: 'report', message: `Synthesizing ${sections.length} area sections into the report…` });
+    } else {
+      messages = buildReportMessages({ repo, sprint, stats, buckets: data.buckets, prs: data.prs, tools });
+      buildRetry = () => buildReportMessages({ repo, sprint, stats, buckets: data.buckets, prs: data.prs, tools: [], compact: true });
+      emit({ task: 'report', message: 'Asking Gemma to write the sprint report…' });
+    }
+
+    let markdown = await runReportTurns(sprintId, data, messages, tools, toolCalls);
+
+    // Reliability backstop: if the model still returns a degenerate, heading-less
+    // response (e.g. "Okay"), retry once with a deliberately slim, tool-free prompt.
     if (looksDegenerateReport(markdown)) {
       emit({ task: 'report', message: 'Report came back empty — retrying with a slimmer prompt…' });
-      const slim = buildReportMessages({ repo, sprint, stats, buckets: data.buckets, prs: data.prs, tools: [], compact: true });
-      const retry = await loggedChat(sprintId, data, 'report', 'retry (compact prompt)', { messages: slim, temperature: 0.3 });
+      const retry = await loggedChat(sprintId, data, 'report', 'retry (compact prompt)', { messages: buildRetry(), temperature: 0.3 });
       if (!looksDegenerateReport(retry) || !markdown) markdown = retry;
     }
 
@@ -318,6 +380,8 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
       createdAt: new Date().toISOString(),
       markdown,
       toolCalls,
+      strategy: useMapReduce ? 'map-reduce' : 'single',
+      sections: sections ? sections.map((s) => ({ area: s.area, markdown: s.markdown })) : undefined,
     };
     data.reports = [report, ...(data.reports || [])].slice(0, 20);
     store.saveSprintData(sprintId, data);
@@ -333,6 +397,19 @@ export function createAnalyzer({ store, ollama, github, mcp, emit = () => {} }) 
 /** A real report has markdown section headings; "Okay"-style failures don't. */
 export function looksDegenerateReport(md) {
   return !md || !/(^|\n)#{1,6}\s/.test(String(md));
+}
+
+/**
+ * Fingerprint of an area's content for the report-section cache: which PRs are in
+ * it and which prompt produced each summary. Changes when a PR is added/removed
+ * or re-summarized, so cached fragments invalidate exactly when they should.
+ */
+export function sectionFingerprint(prs, version = REPORT_SECTION_VERSION) {
+  const key = prs
+    .map((p) => `${p.number}:${p.ann?.summaryFingerprint || (p.ann ? 'a' : 'u')}`)
+    .sort()
+    .join('|');
+  return hashString(`${version}|${key}`);
 }
 
 export function pushLog(data, entry) {

@@ -174,6 +174,15 @@ and if a report still comes back heading-less the generator retries once with an
 slimmer, tool-free prompt. This keeps a 100-PR report prompt around ~4–5k tokens instead of
 ~22k.
 
+For genuinely large sprints (≥2 buckets and more than ~60 merged PRs, tunable via
+`reportMapReduceThreshold`) the report switches automatically to **map-reduce**: each area
+is summarized in its own small call (the MAP step, ~2k tokens regardless of area size, with
+a richer per-PR ledger since only one area is in context), the fragments are cached and
+persisted by a fingerprint of the area's PRs, and a final REDUCE call synthesizes the
+fragments + the deterministic stats into the report (~4–5k tokens even for a dozen areas).
+No single call ever scales with sprint size, so it can't overflow; re-runs only re-map areas
+whose PRs changed, and the MCP tool loop + degenerate-retry run on the reduce step.
+
 ### Sprints are explicit windows
 Each repo has a cycle length (default 3 weeks). A sprint is a stored {start, end}
 window; "New sprint" rolls over from the previous end date. Buckets live per sprint —

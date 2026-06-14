@@ -73,7 +73,10 @@ gh pr list ──► PR store ──► Gemma classifies into buckets ──► 
    specific (no "various fixes"), and told to infer product areas and user impact from
    titles/files rather than ever answering "unclassified" or pasting raw PR titles. These
    conventions follow Keep a Changelog, Conventional Commits and release-notes guidance
-   (see [docs/DESIGN.md](docs/DESIGN.md)). With MCP servers configured, it can call their tools first —
+   (see [docs/DESIGN.md](docs/DESIGN.md)). Small sprints are written in one compact pass;
+   large ones (≥2 buckets, >~60 PRs) switch automatically to **map-reduce** — each area is
+   summarized in its own small call, the fragments are cached/persisted, and a final pass
+   synthesizes them — so the prompt never overflows a local model's context. With MCP servers configured, it can call their tools first —
    e.g. fetch Jira sprint priorities — and add a *planned vs. actual* section.
 
 4. **Prompts tab** — full transparency into the local LLM: every exchange is logged

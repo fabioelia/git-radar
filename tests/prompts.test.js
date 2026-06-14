@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   buildReportMessages, prLedger, buildSummarizeMessages, PR_SUMMARY_SCHEMA,
   summaryFingerprint, isSummaryStale, PROMPT_VERSION,
+  buildBucketSectionMessages, buildReduceMessages,
 } from '../src/main/services/prompts.js';
 
 const repo = { owner: 'acme', name: 'newton', contextPrompt: 'develop → stage → main' };
@@ -181,6 +182,31 @@ test('buildReportMessages frames the report as product notes and forbids the "un
   assert.match(system, /various bug fixes/); // bans vague filler
   assert.match(system, /Do NOT paste raw PR titles/);
   assert.match(system, /must NEVER be buried/);
+});
+
+test('buildBucketSectionMessages (map) scopes to one area with its PRs and asks for a fragment', () => {
+  const msgs = buildBucketSectionMessages({
+    repo,
+    bucket: { name: 'Connectors', description: 'data connectors' },
+    prs: [pr(1, { ann: { workType: 'feature', userFacing: true, userImpact: 'Users can now connect X.' } })],
+    bucketStats: { prCount: 1, byType: { feature: 1 }, userFacingCount: 1 },
+  });
+  assert.match(msgs[0].content, /fragment for ONE area/);
+  const user = msgs[1].content;
+  assert.match(user, /AREA: Connectors — data connectors/);
+  assert.match(user, /#1 "PR 1"/);
+  assert.match(user, /→ Users can now connect X\./);
+});
+
+test('buildReduceMessages synthesizes area fragments + stats into the report', () => {
+  const sections = [{ area: 'Connectors', markdown: 'connectors fragment text' }, { area: 'UI', markdown: 'ui fragment text' }];
+  const msgs = buildReduceMessages({ repo, sprint, stats: emptyStats, sections, tools: [] });
+  assert.match(msgs[0].content, /SYNTHESIZE them/);
+  assert.match(msgs[0].content, /## Headlines/);
+  const user = msgs[1].content;
+  assert.match(user, /AREA SECTIONS/);
+  assert.match(user, /## Connectors\nconnectors fragment text/);
+  assert.match(user, /STATS \(computed deterministically/);
 });
 
 test('buildReportMessages embeds the deterministic ledger in the user turn', () => {
